@@ -1,0 +1,208 @@
+name: Pixel Build Manager Build
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pixel-build-manager-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TARGET_DIR: C:\actions-runner\cargo-target\PixelBuildManager
+
+jobs:
+  source-branch-policy:
+    name: Source branch policy
+    runs-on: [self-hosted, Windows]
+    steps:
+      - name: Require approved pull request source branches
+        shell: cmd
+        run: |
+          if not "%GITHUB_EVENT_NAME%"=="pull_request" exit /b 0
+
+          if "%GITHUB_BASE_REF%"=="dev" (
+            if "%GITHUB_HEAD_REF%"=="main" exit /b 0
+            if "%GITHUB_HEAD_REF:~0,8%"=="feature/" exit /b 0
+            echo Pull requests into dev must come from main or feature/*.
+            echo Actual source branch: %GITHUB_HEAD_REF%
+            exit /b 1
+          )
+
+          if "%GITHUB_BASE_REF%"=="main" (
+            if "%GITHUB_HEAD_REF%"=="dev" exit /b 0
+            if "%GITHUB_HEAD_REF:~0,7%"=="hotfix/" exit /b 0
+            echo Pull requests into main must come from dev or hotfix/*.
+            echo Actual source branch: %GITHUB_HEAD_REF%
+            exit /b 1
+          )
+
+  validate:
+    name: Validate Pixel Build Manager
+    needs: source-branch-policy
+    runs-on: [self-hosted, Windows]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Rust tools
+        shell: cmd
+        run: |
+          where cargo
+          where rustup
+
+      - name: Check Rust formatting
+        shell: cmd
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Lint Rust with clippy
+        shell: cmd
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        shell: cmd
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build Rust backend
+        shell: cmd
+        working-directory: src-tauri
+        run: cargo build
+
+      - name: Install frontend dependencies
+        shell: cmd
+        run: npm ci
+
+      - name: Build frontend
+        shell: cmd
+        run: npm run build
+
+      - name: Run frontend tests
+        shell: cmd
+        run: npm run test
+
+  compute-version:
+    name: Compute next version
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+    needs: validate
+    runs-on: [self-hosted, Windows]
+    outputs:
+      tag: ${{ steps.next-version.outputs.tag }}
+    steps:
+      - name: Calculate next version tag
+        id: next-version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tags = await github.paginate(github.rest.repos.listTags, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const versions = tags
+              .map((tag) => tag.name.match(/^0\.(\d+)\.(\d+)$/))
+              .filter(Boolean)
+              .map((match) => ({
+                minor: Number(match[1]),
+                patch: Number(match[2]),
+              }))
+              .sort((left, right) => left.minor - right.minor || left.patch - right.patch);
+            const latestVersion = versions.at(-1);
+
+            let tag;
+            if (context.ref === 'refs/heads/main') {
+              const nextMinor = latestVersion === undefined ? 1 : latestVersion.minor + 1;
+              tag = `0.${nextMinor}.0`;
+            } else {
+              const nextMinor = latestVersion === undefined ? 0 : latestVersion.minor;
+              const nextPatch = latestVersion === undefined ? 0 : latestVersion.patch + 1;
+              tag = `0.${nextMinor}.${nextPatch}`;
+            }
+            core.setOutput('tag', tag);
+
+  package:
+    name: Package ${{ matrix.platform }}
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+    needs: compute-version
+    runs-on: [self-hosted, Windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - windows-x64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install frontend dependencies
+        shell: cmd
+        run: npm ci
+
+      - name: Write version into tauri.conf.json
+        shell: pwsh
+        run: |
+          $configPath = "src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.version = "${{ needs.compute-version.outputs.tag }}"
+          $config | ConvertTo-Json -Depth 32 | Set-Content $configPath
+
+      - name: Build Tauri app
+        shell: cmd
+        run: npm run tauri build
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-build-manager-${{ matrix.platform }}
+          path: src-tauri/target/release/bundle/**/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+    needs: [compute-version, package]
+    runs-on: [self-hosted, Windows]
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/release-downloads
+          merge-multiple: true
+
+      - name: Create release tag
+        shell: cmd
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ needs.compute-version.outputs.tag }}" "%GITHUB_SHA%"
+          git push origin "${{ needs.compute-version.outputs.tag }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.compute-version.outputs.tag }}
+          name: Pixel Build Manager ${{ needs.compute-version.outputs.tag }}
+          draft: false
+          prerelease: ${{ github.ref == 'refs/heads/dev' }}
+          files: artifacts/release-downloads/**/*
