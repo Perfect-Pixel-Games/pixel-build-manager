@@ -2,7 +2,7 @@
 // clippy would otherwise flag these as dead code under `-D warnings`.
 #![allow(dead_code)]
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct RepoSummary {
@@ -16,7 +16,7 @@ pub struct RepoOwner {
     pub login: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseSummary {
     pub id: u64,
     pub tag_name: String,
@@ -26,7 +26,7 @@ pub struct ReleaseSummary {
     pub assets: Vec<ReleaseAsset>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseAsset {
     pub id: u64,
     pub name: String,
