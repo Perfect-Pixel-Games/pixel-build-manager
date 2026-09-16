@@ -110,7 +110,7 @@ fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
 async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectListItem>, String> {
     let client = build_github_client(&state)?;
     let repos = client
-        .list_accessible_repos()
+        .list_accessible_repos_with_releases()
         .await
         .map_err(|e| e.to_string())?;
     let settings = Settings::load_from(&state.settings_path);

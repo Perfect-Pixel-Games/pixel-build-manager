@@ -100,6 +100,38 @@ impl GithubClient {
         Ok(repos)
     }
 
+    /// Lists accessible repos, filtered down to only those that have
+    /// published at least one release (including pre-releases). Repos are
+    /// checked concurrently. A repo whose release check itself fails (e.g. a
+    /// transient error) is excluded rather than failing the whole listing --
+    /// one flaky repo shouldn't block browsing the rest.
+    pub async fn list_accessible_repos_with_releases(
+        &self,
+    ) -> Result<Vec<RepoSummary>, GithubError> {
+        let repos = self.list_accessible_repos().await?;
+
+        let has_releases = futures_util::future::join_all(
+            repos
+                .iter()
+                .map(|repo| self.has_any_release(&repo.owner.login, &repo.name)),
+        )
+        .await;
+
+        Ok(repos
+            .into_iter()
+            .zip(has_releases)
+            .filter_map(|(repo, has_releases)| has_releases.unwrap_or(false).then_some(repo))
+            .collect())
+    }
+
+    pub async fn has_any_release(&self, owner: &str, repo: &str) -> Result<bool, GithubError> {
+        let path = format!("/repos/{}/{}/releases?per_page=1", owner, repo);
+        let response = self.request(reqwest::Method::GET, &path).send().await?;
+        let response = Self::ensure_success(response).await?;
+        let releases: Vec<serde_json::Value> = response.json().await?;
+        Ok(!releases.is_empty())
+    }
+
     pub async fn list_releases(
         &self,
         owner: &str,
@@ -224,5 +256,94 @@ mod tests {
             releases[0].assets[0].name,
             "last-beacon-windows-x64-shipping.tar.gz"
         );
+    }
+
+    #[tokio::test]
+    async fn has_any_release_is_true_when_the_repo_has_at_least_one_release() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/pixel-perfect/last-beacon/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "id": 1, "tag_name": "0.2.14", "name": null, "prerelease": false, "published_at": null, "assets": [] }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::with_base_url("token123".to_string(), server.uri());
+
+        assert!(client
+            .has_any_release("pixel-perfect", "last-beacon")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn has_any_release_is_false_when_the_repo_has_no_releases() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/pixel-perfect/empty-repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::with_base_url("token123".to_string(), server.uri());
+
+        assert!(!client
+            .has_any_release("pixel-perfect", "empty-repo")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_accessible_repos_with_releases_filters_out_repos_without_any_release() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user/repos"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "last-beacon", "full_name": "pixel-perfect/last-beacon", "owner": { "login": "pixel-perfect" } },
+                { "name": "empty-repo", "full_name": "pixel-perfect/empty-repo", "owner": { "login": "pixel-perfect" } }
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/pixel-perfect/last-beacon/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "id": 1, "tag_name": "0.2.14", "name": null, "prerelease": false, "published_at": null, "assets": [] }
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/pixel-perfect/empty-repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::with_base_url("token123".to_string(), server.uri());
+        let repos = client.list_accessible_repos_with_releases().await.unwrap();
+
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].full_name, "pixel-perfect/last-beacon");
+    }
+
+    #[tokio::test]
+    async fn list_accessible_repos_with_releases_excludes_a_repo_whose_release_check_fails() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user/repos"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "flaky-repo", "full_name": "pixel-perfect/flaky-repo", "owner": { "login": "pixel-perfect" } }
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/pixel-perfect/flaky-repo/releases"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::with_base_url("token123".to_string(), server.uri());
+        let repos = client.list_accessible_repos_with_releases().await.unwrap();
+
+        assert!(repos.is_empty());
     }
 }
