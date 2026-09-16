@@ -134,10 +134,29 @@ fn toggle_favorite(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_workspace_root(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .workspace_root
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn set_workspace_root(root: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_workspace_root(PathBuf::from(root));
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let settings_path = settings_path_for(app.handle());
             app.manage(AppState {
@@ -153,7 +172,9 @@ pub fn run() {
             is_logged_in,
             list_projects,
             list_releases_for_project,
-            toggle_favorite
+            toggle_favorite,
+            get_workspace_root,
+            set_workspace_root
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

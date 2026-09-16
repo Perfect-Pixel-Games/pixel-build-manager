@@ -43,6 +43,10 @@ impl Settings {
             .or_default()
             .favorite = favorite;
     }
+
+    pub fn set_workspace_root(&mut self, root: PathBuf) {
+        self.workspace_root = Some(root);
+    }
 }
 
 #[cfg(test)]
@@ -95,5 +99,14 @@ mod tests {
         settings.set_favorite("pixel-perfect/last-beacon", false);
 
         assert!(!settings.projects["pixel-perfect/last-beacon"].favorite);
+    }
+
+    #[test]
+    fn set_workspace_root_updates_the_field() {
+        let mut settings = Settings::default();
+
+        settings.set_workspace_root(PathBuf::from("D:\\Builds"));
+
+        assert_eq!(settings.workspace_root, Some(PathBuf::from("D:\\Builds")));
     }
 }
