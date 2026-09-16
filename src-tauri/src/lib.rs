@@ -9,6 +9,7 @@ use auth::token_store::{KeyringTokenStore, TokenStore};
 use github::client::{GithubClient, ReleaseSummary};
 use serde::Serialize;
 use settings::Settings;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use sync::cache::cache_dir;
@@ -23,6 +24,29 @@ pub struct AppState {
     /// Serializes settings.json read-modify-write cycles across commands so
     /// concurrent writes (e.g. rapid favorite toggles) can't clobber each other.
     pub settings_lock: Mutex<()>,
+    /// Project keys with an in-flight sync or cache-clear operation, so the
+    /// two can never race against each other's filesystem writes for the
+    /// same project (e.g. clearing a cache mid-download).
+    pub active_operations: Mutex<HashSet<String>>,
+}
+
+/// Marks `project_key` as having an in-flight operation, failing if one is
+/// already running. Callers must pair this with `end_operation` on every
+/// exit path (success or error).
+fn begin_operation(state: &AppState, project_key: &str) -> Result<(), String> {
+    let mut active = state.active_operations.lock().map_err(|e| e.to_string())?;
+    if !active.insert(project_key.to_string()) {
+        return Err(format!(
+            "another sync or cache operation is already in progress for {project_key}"
+        ));
+    }
+    Ok(())
+}
+
+fn end_operation(state: &AppState, project_key: &str) {
+    if let Ok(mut active) = state.active_operations.lock() {
+        active.remove(project_key);
+    }
 }
 
 fn settings_path_for(app: &tauri::AppHandle) -> PathBuf {
@@ -178,6 +202,33 @@ async fn sync_release_asset(
     download_url: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    begin_operation(&state, &project_key)?;
+    let result = sync_release_asset_inner(
+        app,
+        &project_key,
+        &release_tag,
+        asset_id,
+        &asset_name,
+        asset_size,
+        &download_url,
+        &state,
+    )
+    .await;
+    end_operation(&state, &project_key);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn sync_release_asset_inner(
+    app: tauri::AppHandle,
+    project_key: &str,
+    release_tag: &str,
+    asset_id: u64,
+    asset_name: &str,
+    asset_size: u64,
+    download_url: &str,
+    state: &AppState,
+) -> Result<(), String> {
     let settings = Settings::load_from(&state.settings_path);
     let workspace_root = settings
         .workspace_root
@@ -187,14 +238,14 @@ async fn sync_release_asset(
     let http = reqwest::Client::new();
     let request = SyncRequest {
         workspace_root: &workspace_root,
-        project_key: &project_key,
+        project_key,
         asset_id,
-        asset_name: &asset_name,
+        asset_name,
         asset_size,
-        download_url: &download_url,
+        download_url,
     };
 
-    let project_key_for_events = project_key.clone();
+    let project_key_for_events = project_key.to_string();
     sync_asset(&http, request, move |downloaded, total| {
         let _ = app.emit(
             "sync-progress",
@@ -210,10 +261,13 @@ async fn sync_release_asset(
 
     let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
     let mut settings = Settings::load_from(&state.settings_path);
-    settings.set_active_release(&project_key, &release_tag, &asset_name);
-    settings
-        .save_to(&state.settings_path)
-        .map_err(|e| e.to_string())
+    settings.set_active_release(project_key, release_tag, asset_name);
+    settings.save_to(&state.settings_path).map_err(|e| {
+        format!(
+            "build was downloaded and installed, but failed to record it as the active \
+             release ({e}) -- try syncing again"
+        )
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,11 +294,18 @@ fn clear_project_cache(
     project_key: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    begin_operation(&state, &project_key)?;
+    let result = clear_project_cache_inner(&project_key, &state);
+    end_operation(&state, &project_key);
+    result
+}
+
+fn clear_project_cache_inner(project_key: &str, state: &AppState) -> Result<(), String> {
     let settings = Settings::load_from(&state.settings_path);
     let workspace_root = settings
         .workspace_root
         .ok_or_else(|| "workspace root not set".to_string())?;
-    let dir = cache_dir(&workspace_root, &project_key);
+    let dir = cache_dir(&workspace_root, project_key);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
@@ -262,6 +323,7 @@ pub fn run() {
                 token_store: Arc::new(KeyringTokenStore),
                 settings_path,
                 settings_lock: Mutex::new(()),
+                active_operations: Mutex::new(HashSet::new()),
             });
             Ok(())
         })
