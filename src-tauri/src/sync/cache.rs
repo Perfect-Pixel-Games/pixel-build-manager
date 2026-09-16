@@ -5,18 +5,21 @@
 
 use std::path::{Path, PathBuf};
 
-/// Encodes an "owner/repo" project key into a single filesystem-safe directory
-/// name. GitHub owner and repo names may themselves contain hyphens, so a
-/// naive `replace('/', "-")` can collide two different projects onto the same
-/// directory (e.g. "foo/bar-baz" and "foo-bar/baz" would both become
-/// "foo-bar-baz"). Escaping literal hyphens first (`-` -> `--`) before using a
-/// single `-` as the owner/repo separator keeps the mapping collision-free.
-fn encode_project_key(project_key: &str) -> String {
-    project_key.replace('-', "--").replace('/', "-")
-}
-
+/// Turns an "owner/repo" project key into a project directory nested as
+/// `<workspace_root>/<owner>/<repo>`. Nesting (rather than flattening the key
+/// into a single nameing-escaped directory component) is what actually makes
+/// this collision-free: any string-based encoding scheme that joins owner and
+/// repo into one path segment risks two different owner/repo pairs colliding
+/// on the same encoded string whenever hyphens straddle the boundary between
+/// them (verified: naive `replace('/', "-")`, and even a hyphen-escaping
+/// variant, both had live collisions). Separate filesystem directory
+/// components can never collide this way, since each level is stored as a
+/// distinct entry rather than concatenated into one string.
 pub fn project_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
-    workspace_root.join(encode_project_key(project_key))
+    match project_key.split_once('/') {
+        Some((owner, repo)) => workspace_root.join(owner).join(repo),
+        None => workspace_root.join(project_key),
+    }
 }
 
 pub fn cache_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
@@ -41,15 +44,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_dir_replaces_slash_with_dash() {
+    fn project_dir_nests_owner_and_repo() {
         let root = Path::new("D:\\Builds");
 
         let dir = project_dir(root, "pixel-perfect/last-beacon");
 
-        assert_eq!(
-            dir,
-            PathBuf::from("D:\\Builds\\pixel--perfect-last--beacon")
-        );
+        assert_eq!(dir, PathBuf::from("D:\\Builds\\pixel-perfect\\last-beacon"));
     }
 
     #[test]
@@ -63,16 +63,26 @@ mod tests {
     }
 
     #[test]
+    fn project_dir_does_not_collide_when_hyphens_sit_at_the_boundary() {
+        let root = Path::new("D:\\Builds");
+
+        let first = project_dir(root, "foo-/bar");
+        let second = project_dir(root, "foo/-bar");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn cache_and_active_dirs_are_siblings_under_the_project_dir() {
         let root = Path::new("D:\\Builds");
 
         assert_eq!(
             cache_dir(root, "org/repo"),
-            PathBuf::from("D:\\Builds\\org-repo\\cache")
+            PathBuf::from("D:\\Builds\\org\\repo\\cache")
         );
         assert_eq!(
             active_dir(root, "org/repo"),
-            PathBuf::from("D:\\Builds\\org-repo\\active")
+            PathBuf::from("D:\\Builds\\org\\repo\\active")
         );
     }
 
@@ -84,7 +94,7 @@ mod tests {
 
         assert_eq!(
             path,
-            PathBuf::from("D:\\Builds\\org-repo\\cache\\42-build-shipping.zip")
+            PathBuf::from("D:\\Builds\\org\\repo\\cache\\42-build-shipping.zip")
         );
     }
 }
