@@ -17,7 +17,11 @@ function ProjectRow({
 }) {
   return (
     <li>
-      <button aria-label="toggle favorite" onClick={() => onToggleFavorite(project.full_name, !project.favorite)}>
+      <button
+        aria-label={`Toggle favorite for ${project.name}`}
+        aria-pressed={project.favorite}
+        onClick={() => onToggleFavorite(project.full_name, !project.favorite)}
+      >
         {project.favorite ? "★" : "☆"}
       </button>
       <button onClick={() => onSelect(project.full_name)}>{project.name}</button>
