@@ -16,7 +16,7 @@ use sync::cache::cache_dir;
 use sync::orchestrator::{sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
 
-const GITHUB_CLIENT_ID: &str = "REPLACE_WITH_YOUR_GITHUB_OAUTH_APP_CLIENT_ID";
+const GITHUB_CLIENT_ID: &str = "Ov23ligQDGOJvlWsEXJc";
 
 pub struct AppState {
     pub token_store: Arc<dyn TokenStore>,
