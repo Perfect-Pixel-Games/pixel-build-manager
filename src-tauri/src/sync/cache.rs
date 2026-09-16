@@ -5,8 +5,18 @@
 
 use std::path::{Path, PathBuf};
 
+/// Encodes an "owner/repo" project key into a single filesystem-safe directory
+/// name. GitHub owner and repo names may themselves contain hyphens, so a
+/// naive `replace('/', "-")` can collide two different projects onto the same
+/// directory (e.g. "foo/bar-baz" and "foo-bar/baz" would both become
+/// "foo-bar-baz"). Escaping literal hyphens first (`-` -> `--`) before using a
+/// single `-` as the owner/repo separator keeps the mapping collision-free.
+fn encode_project_key(project_key: &str) -> String {
+    project_key.replace('-', "--").replace('/', "-")
+}
+
 pub fn project_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
-    workspace_root.join(project_key.replace('/', "-"))
+    workspace_root.join(encode_project_key(project_key))
 }
 
 pub fn cache_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
@@ -36,7 +46,20 @@ mod tests {
 
         let dir = project_dir(root, "pixel-perfect/last-beacon");
 
-        assert_eq!(dir, PathBuf::from("D:\\Builds\\pixel-perfect-last-beacon"));
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\pixel--perfect-last--beacon")
+        );
+    }
+
+    #[test]
+    fn project_dir_does_not_collide_when_hyphens_straddle_the_slash() {
+        let root = Path::new("D:\\Builds");
+
+        let first = project_dir(root, "foo/bar-baz");
+        let second = project_dir(root, "foo-bar/baz");
+
+        assert_ne!(first, second);
     }
 
     #[test]
