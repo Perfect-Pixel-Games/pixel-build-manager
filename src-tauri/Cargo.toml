@@ -1,0 +1,47 @@
+[package]
+name = "pixel-build-manager"
+version = "0.1.0"
+description = "Browse and sync GitHub release builds for projects you have access to"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "pixel_build_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio = { version = "1", features = ["full"] }
+keyring = { version = "3", features = ["windows-native"] }
+thiserror = "2"
+zip = "2"
+tar = "0.4"
+flate2 = "1"
+futures-util = "0.3"
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+tauri-plugin-dialog = "2.7.3"
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"
+tokio-test = "0.4"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
