@@ -70,6 +70,15 @@ impl GithubClient {
             .header("User-Agent", "pixel-build-manager")
     }
 
+    async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, GithubError> {
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(GithubError::Api { status, body });
+        }
+        Ok(response)
+    }
+
     pub async fn list_accessible_repos(&self) -> Result<Vec<RepoSummary>, GithubError> {
         let mut repos = Vec::new();
         let mut page = 1;
@@ -80,12 +89,7 @@ impl GithubClient {
                 page
             );
             let response = self.request(reqwest::Method::GET, &path).send().await?;
-
-            if !response.status().is_success() {
-                let status = response.status().as_u16();
-                let body = response.text().await.unwrap_or_default();
-                return Err(GithubError::Api { status, body });
-            }
+            let response = Self::ensure_success(response).await?;
 
             let batch: Vec<RepoSummary> = response.json().await?;
             let is_last_page = batch.len() < 100;
@@ -107,12 +111,7 @@ impl GithubClient {
     ) -> Result<Vec<ReleaseSummary>, GithubError> {
         let path = format!("/repos/{}/{}/releases?per_page=100", owner, repo);
         let response = self.request(reqwest::Method::GET, &path).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            return Err(GithubError::Api { status, body });
-        }
+        let response = Self::ensure_success(response).await?;
 
         Ok(response.json().await?)
     }
