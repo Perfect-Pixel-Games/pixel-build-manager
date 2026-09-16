@@ -1,4 +1,5 @@
 mod auth;
+mod github;
 mod settings;
 
 use auth::device_flow::DeviceFlowClient;
