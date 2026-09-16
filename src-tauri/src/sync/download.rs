@@ -35,6 +35,28 @@ pub async fn download_with_progress<F: FnMut(u64, u64)>(
         return Err(DownloadError::Http { status, body });
     }
 
+    let result =
+        write_response_to_file(response, destination, expected_size, &mut on_progress).await;
+
+    // Any failure past this point (network drop mid-stream, disk write error,
+    // size mismatch) can leave a partial/corrupt file at `destination`. Since
+    // callers (e.g. the sync orchestrator) treat "file exists" as "fully
+    // cached" and skip re-downloading, an uncleaned partial file would be fed
+    // straight to extraction and fail there with a confusing error instead of
+    // self-healing via a clean re-download next time.
+    if result.is_err() {
+        tokio::fs::remove_file(destination).await.ok();
+    }
+
+    result
+}
+
+async fn write_response_to_file<F: FnMut(u64, u64)>(
+    response: reqwest::Response,
+    destination: &Path,
+    expected_size: u64,
+    on_progress: &mut F,
+) -> Result<(), DownloadError> {
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(destination).await?;
     let mut downloaded: u64 = 0;
@@ -48,7 +70,6 @@ pub async fn download_with_progress<F: FnMut(u64, u64)>(
     file.flush().await?;
 
     if downloaded != expected_size {
-        tokio::fs::remove_file(destination).await.ok();
         return Err(DownloadError::SizeMismatch {
             expected: expected_size,
             actual: downloaded,
