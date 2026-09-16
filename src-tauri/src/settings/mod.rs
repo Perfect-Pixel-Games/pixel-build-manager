@@ -1,3 +1,7 @@
+// Not yet wired into any Tauri command (that lands in Phase 2), so clippy
+// would otherwise flag these as dead code under `-D warnings`.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,9 +56,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("settings.json");
 
-        let mut settings = Settings::default();
-        settings.workspace_root = Some(PathBuf::from("D:\\Builds"));
-        settings.projects.insert(
+        let mut projects = HashMap::new();
+        projects.insert(
             "pixel-perfect/last-beacon".to_string(),
             ProjectSettings {
                 favorite: true,
@@ -62,6 +65,10 @@ mod tests {
                 active_asset_name: Some("last-beacon-windows-x64-shipping.zip".to_string()),
             },
         );
+        let settings = Settings {
+            workspace_root: Some(PathBuf::from("D:\\Builds")),
+            projects,
+        };
 
         settings.save_to(&path).unwrap();
         let loaded = Settings::load_from(&path);
