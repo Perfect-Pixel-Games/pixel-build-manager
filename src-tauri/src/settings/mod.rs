@@ -47,6 +47,12 @@ impl Settings {
     pub fn set_workspace_root(&mut self, root: PathBuf) {
         self.workspace_root = Some(root);
     }
+
+    pub fn set_active_release(&mut self, project_key: &str, release_tag: &str, asset_name: &str) {
+        let project = self.projects.entry(project_key.to_string()).or_default();
+        project.active_release_tag = Some(release_tag.to_string());
+        project.active_asset_name = Some(asset_name.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +114,19 @@ mod tests {
         settings.set_workspace_root(PathBuf::from("D:\\Builds"));
 
         assert_eq!(settings.workspace_root, Some(PathBuf::from("D:\\Builds")));
+    }
+
+    #[test]
+    fn set_active_release_records_tag_and_asset() {
+        let mut settings = Settings::default();
+
+        settings.set_active_release("org/repo", "0.2.14", "build-shipping.zip");
+
+        let project = &settings.projects["org/repo"];
+        assert_eq!(project.active_release_tag, Some("0.2.14".to_string()));
+        assert_eq!(
+            project.active_asset_name,
+            Some("build-shipping.zip".to_string())
+        );
     }
 }
