@@ -72,4 +72,38 @@ describe("useSync", () => {
       expect(result.current.state).toEqual({ phase: "syncing", downloaded: 500, total: 1000 }),
     );
   });
+
+  it("ignores a second sync() call while one is already in flight", async () => {
+    let resolveFirstSync: () => void = () => {};
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstSync = () => resolve(undefined);
+        }),
+    );
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    act(() => {
+      result.current.sync(release, asset);
+    });
+    act(() => {
+      // Second call while the first is still pending -- should be a no-op.
+      result.current.sync(release, asset);
+    });
+
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstSync();
+    });
+
+    expect(result.current.state).toEqual({ phase: "done" });
+
+    // Once the first call has finished, sync() should work again.
+    vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
+    await act(async () => {
+      await result.current.sync(release, asset);
+    });
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(2);
+  });
 });
