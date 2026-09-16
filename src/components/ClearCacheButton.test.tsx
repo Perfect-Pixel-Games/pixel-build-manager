@@ -15,6 +15,27 @@ describe("ClearCacheButton", () => {
     await waitFor(() => expect(syncApi.clearProjectCache).toHaveBeenCalledWith("owner/repo"));
   });
 
+  it("calls onCleared after a successful clear", async () => {
+    vi.mocked(syncApi.clearProjectCache).mockResolvedValue(undefined);
+    const onCleared = vi.fn();
+
+    render(<ClearCacheButton projectKey="owner/repo" onCleared={onCleared} />);
+    fireEvent.click(screen.getByRole("button", { name: /clear cache/i }));
+
+    await waitFor(() => expect(onCleared).toHaveBeenCalled());
+  });
+
+  it("does not call onCleared when clearing the cache fails", async () => {
+    vi.mocked(syncApi.clearProjectCache).mockRejectedValue(new Error("disk error"));
+    const onCleared = vi.fn();
+
+    render(<ClearCacheButton projectKey="owner/repo" onCleared={onCleared} />);
+    fireEvent.click(screen.getByRole("button", { name: /clear cache/i }));
+
+    expect(await screen.findByText(/failed to clear cache: disk error/i)).toBeInTheDocument();
+    expect(onCleared).not.toHaveBeenCalled();
+  });
+
   it("shows an error message when clearing the cache fails", async () => {
     vi.mocked(syncApi.clearProjectCache).mockRejectedValue(new Error("disk error"));
 

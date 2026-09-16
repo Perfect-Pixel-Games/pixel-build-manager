@@ -3,9 +3,10 @@ import { clearProjectCache } from "../api/sync";
 
 type Props = {
   projectKey: string;
+  onCleared?: () => void;
 };
 
-export function ClearCacheButton({ projectKey }: Props) {
+export function ClearCacheButton({ projectKey, onCleared }: Props) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,6 +15,7 @@ export function ClearCacheButton({ projectKey }: Props) {
     setPending(true);
     try {
       await clearProjectCache(projectKey);
+      onCleared?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

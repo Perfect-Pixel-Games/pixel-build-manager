@@ -1,3 +1,5 @@
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Turns an "owner/repo" project key into a project directory nested as
@@ -45,6 +47,30 @@ pub fn cached_asset_path(
     asset_name: &str,
 ) -> PathBuf {
     cache_dir(workspace_root, project_key).join(format!("{}-{}", asset_id, asset_name))
+}
+
+/// Lists the asset IDs currently present in `project_key`'s cache dir, read
+/// back from the `<id>-<name>` file-naming scheme `cached_asset_path` writes.
+/// Returns an empty list (not an error) when the cache dir doesn't exist yet,
+/// since "no cache dir" and "empty cache dir" mean the same thing to callers.
+pub fn list_cached_asset_ids(workspace_root: &Path, project_key: &str) -> io::Result<Vec<u64>> {
+    let dir = cache_dir(workspace_root, project_key);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut ids = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if let Some(name) = entry.file_name().to_str() {
+            if let Some((id_str, _)) = name.split_once('-') {
+                if let Ok(id) = id_str.parse::<u64>() {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -104,5 +130,29 @@ mod tests {
             path,
             PathBuf::from("D:\\Builds\\org\\repo\\cache\\42-build-shipping.zip")
         );
+    }
+
+    #[test]
+    fn list_cached_asset_ids_reads_ids_from_cache_file_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let cache = cache_dir(root, "org/repo");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("42-build-shipping.zip"), b"data").unwrap();
+        fs::write(cache.join("7-build-test.tar.gz"), b"data").unwrap();
+
+        let mut ids = list_cached_asset_ids(root, "org/repo").unwrap();
+        ids.sort();
+
+        assert_eq!(ids, vec![7, 42]);
+    }
+
+    #[test]
+    fn list_cached_asset_ids_returns_empty_when_cache_dir_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let ids = list_cached_asset_ids(dir.path(), "org/repo").unwrap();
+
+        assert!(ids.is_empty());
     }
 }

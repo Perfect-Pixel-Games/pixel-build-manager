@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { isLoggedIn, logout } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { getWorkspaceRoot } from "./api/settings";
-import { getActiveRelease } from "./api/sync";
+import {
+  deleteCachedAsset,
+  getActiveExecutable,
+  getActiveRelease,
+  launchActiveBuild,
+  listCachedAssets,
+} from "./api/sync";
 import { ClearCacheButton } from "./components/ClearCacheButton";
 import { Login } from "./components/Login";
 import { ProjectList } from "./components/ProjectList";
@@ -14,7 +20,11 @@ import "./App.css";
 
 function ProjectDetail({ projectKey }: { projectKey: string }) {
   const [releases, setReleases] = useState<Release[]>([]);
+  const [activeReleaseTag, setActiveReleaseTag] = useState<string | null>(null);
   const [activeAssetName, setActiveAssetName] = useState<string | null>(null);
+  const [activeExecutable, setActiveExecutable] = useState<string | null>(null);
+  const [cachedAssetIds, setCachedAssetIds] = useState<Set<number>>(new Set());
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const { state, sync } = useSync(projectKey);
 
   useEffect(() => {
@@ -22,21 +32,73 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
       .then(setReleases)
       .catch((error) => console.error("failed to load releases", error));
     getActiveRelease(projectKey)
-      .then((active) => setActiveAssetName(active.asset_name))
+      .then((active) => {
+        setActiveReleaseTag(active.release_tag);
+        setActiveAssetName(active.asset_name);
+      })
       .catch((error) => console.error("failed to load active release", error));
+    getActiveExecutable(projectKey)
+      .then(setActiveExecutable)
+      .catch((error) => console.error("failed to look up active executable", error));
+    listCachedAssets(projectKey)
+      .then((ids) => setCachedAssetIds(new Set(ids)))
+      .catch((error) => console.error("failed to list cached assets", error));
   }, [projectKey]);
 
   const handleSync = async (release: Release, assetId: number) => {
     const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
     await sync(release, asset);
+    setActiveReleaseTag(release.tag_name);
     setActiveAssetName(asset.name);
+    setCachedAssetIds((prev) => new Set(prev).add(assetId));
+    try {
+      setActiveExecutable(await getActiveExecutable(projectKey));
+    } catch (error) {
+      console.error("failed to look up active executable", error);
+    }
+  };
+
+  const handleDelete = async (release: Release, assetId: number) => {
+    const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
+    try {
+      await deleteCachedAsset(projectKey, assetId, asset.name);
+      setCachedAssetIds((prev) => {
+        const next = new Set(prev);
+        next.delete(assetId);
+        return next;
+      });
+    } catch (error) {
+      console.error("failed to delete cached asset", error);
+    }
+  };
+
+  const handlePlay = async () => {
+    setLaunchError(null);
+    try {
+      await launchActiveBuild(projectKey);
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
     <div>
       <SyncStatus state={state} />
-      <ReleaseList releases={releases} activeAssetName={activeAssetName} onSync={handleSync} />
-      <ClearCacheButton projectKey={projectKey} />
+      {activeExecutable && (
+        <div>
+          <button onClick={handlePlay}>Play</button>
+          {launchError && <p>Failed to launch: {launchError}</p>}
+        </div>
+      )}
+      <ReleaseList
+        releases={releases}
+        activeReleaseTag={activeReleaseTag}
+        activeAssetName={activeAssetName}
+        cachedAssetIds={cachedAssetIds}
+        onSync={handleSync}
+        onDelete={handleDelete}
+      />
+      <ClearCacheButton projectKey={projectKey} onCleared={() => setCachedAssetIds(new Set())} />
     </div>
   );
 }

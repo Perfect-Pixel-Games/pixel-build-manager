@@ -12,7 +12,8 @@ use settings::Settings;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use sync::cache::cache_dir;
+use sync::cache::{active_dir, cache_dir, cached_asset_path, list_cached_asset_ids};
+use sync::launch::{find_active_executable, launch_executable};
 use sync::orchestrator::{sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
 
@@ -312,6 +313,76 @@ fn clear_project_cache_inner(project_key: &str, state: &AppState) -> Result<(), 
     Ok(())
 }
 
+#[tauri::command]
+fn list_cached_assets(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<u64>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    let workspace_root = settings
+        .workspace_root
+        .ok_or_else(|| "workspace root not set".to_string())?;
+    list_cached_asset_ids(&workspace_root, &project_key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_cached_asset(
+    project_key: String,
+    asset_id: u64,
+    asset_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    begin_operation(&state, &project_key)?;
+    let result = delete_cached_asset_inner(&project_key, asset_id, &asset_name, &state);
+    end_operation(&state, &project_key);
+    result
+}
+
+fn delete_cached_asset_inner(
+    project_key: &str,
+    asset_id: u64,
+    asset_name: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let settings = Settings::load_from(&state.settings_path);
+    let workspace_root = settings
+        .workspace_root
+        .ok_or_else(|| "workspace root not set".to_string())?;
+    let path = cached_asset_path(&workspace_root, project_key, asset_id, asset_name);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn workspace_root_from_settings(state: &AppState) -> Result<PathBuf, String> {
+    Settings::load_from(&state.settings_path)
+        .workspace_root
+        .ok_or_else(|| "workspace root not set".to_string())
+}
+
+#[tauri::command]
+fn get_active_executable(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let active = active_dir(&workspace_root, &project_key);
+    Ok(find_active_executable(&active).map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn launch_active_build(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let active = active_dir(&workspace_root, &project_key);
+    let exe = find_active_executable(&active)
+        .ok_or_else(|| "no executable found in the active build".to_string())?;
+    launch_executable(&exe).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -338,7 +409,11 @@ pub fn run() {
             set_workspace_root,
             sync_release_asset,
             get_active_release,
-            clear_project_cache
+            clear_project_cache,
+            list_cached_assets,
+            delete_cached_asset,
+            get_active_executable,
+            launch_active_build
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
