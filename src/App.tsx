@@ -20,13 +20,17 @@ function App() {
 
   useEffect(() => {
     if (loggedIn) {
-      listProjects().then(setProjects);
+      listProjects()
+        .then(setProjects)
+        .catch((error) => console.error("failed to load projects", error));
     }
   }, [loggedIn]);
 
   useEffect(() => {
     if (selectedProject) {
-      listReleasesForProject(selectedProject).then(setReleases);
+      listReleasesForProject(selectedProject)
+        .then(setReleases)
+        .catch((error) => console.error("failed to load releases", error));
     }
   }, [selectedProject]);
 
