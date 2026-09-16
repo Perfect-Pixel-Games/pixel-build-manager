@@ -6,12 +6,16 @@ type Props = {
 
 export function WorkspaceSetup({ onSet }: Props) {
   const handleChoose = async () => {
-    const folder = await pickFolder();
-    if (folder === null) {
-      return;
+    try {
+      const folder = await pickFolder();
+      if (folder === null) {
+        return;
+      }
+      await setWorkspaceRoot(folder);
+      onSet(folder);
+    } catch (error) {
+      console.error("failed to set workspace root", error);
     }
-    await setWorkspaceRoot(folder);
-    onSet(folder);
   };
 
   return (

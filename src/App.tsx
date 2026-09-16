@@ -65,8 +65,12 @@ function App() {
   }, [loggedIn]);
 
   const handleToggleFavorite = async (fullName: string, favorite: boolean) => {
-    await toggleFavorite(fullName, favorite);
-    setProjects((prev) => prev.map((p) => (p.full_name === fullName ? { ...p, favorite } : p)));
+    try {
+      await toggleFavorite(fullName, favorite);
+      setProjects((prev) => prev.map((p) => (p.full_name === fullName ? { ...p, favorite } : p)));
+    } catch (error) {
+      console.error("failed to toggle favorite", error);
+    }
   };
 
   const handleLoggedIn = useCallback(() => setLoggedIn(true), []);
@@ -87,8 +91,12 @@ function App() {
     <div>
       <button
         onClick={async () => {
-          await logout();
-          setLoggedIn(false);
+          try {
+            await logout();
+            setLoggedIn(false);
+          } catch (error) {
+            console.error("failed to log out", error);
+          }
         }}
       >
         Log out

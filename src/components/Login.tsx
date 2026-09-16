@@ -33,7 +33,11 @@ export function Login({ onLoggedIn }: Props) {
 
   const handleLogin = async () => {
     setStatus(null);
-    await loginStart();
+    try {
+      await loginStart();
+    } catch (error) {
+      console.error("failed to start login", error);
+    }
   };
 
   return (
