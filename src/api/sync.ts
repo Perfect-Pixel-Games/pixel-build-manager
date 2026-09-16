@@ -28,6 +28,16 @@ export function syncReleaseAsset(
   });
 }
 
+export function checkReleaseAsset(projectKey: string, asset: ReleaseAsset): Promise<void> {
+  return invoke("check_release_asset", {
+    projectKey,
+    assetId: asset.id,
+    assetName: asset.name,
+    assetSize: asset.size,
+    downloadUrl: asset.browser_download_url,
+  });
+}
+
 export function getActiveRelease(projectKey: string): Promise<ActiveRelease> {
   return invoke("get_active_release", { projectKey });
 }

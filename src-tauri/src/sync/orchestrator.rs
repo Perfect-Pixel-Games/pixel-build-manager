@@ -1,7 +1,7 @@
 use crate::sync::cache::{active_dir, cache_dir, cached_asset_path};
 use crate::sync::download::{download_with_progress, DownloadError};
 use crate::sync::extract::{extract_to_active, ExtractError};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
@@ -22,11 +22,16 @@ pub struct SyncRequest<'a> {
     pub download_url: &'a str,
 }
 
-pub async fn sync_asset<F: FnMut(u64, u64)>(
+/// Ensures a valid copy of the requested asset is present in the project's
+/// cache dir, downloading (or re-downloading, if the existing copy's size
+/// doesn't match) as needed. Does not touch the active build in any way --
+/// this is the "Check"/"Sync" button's action, distinct from actually
+/// activating a build.
+async fn ensure_cached_copy<F: FnMut(u64, u64)>(
     http: &reqwest::Client,
-    request: SyncRequest<'_>,
+    request: &SyncRequest<'_>,
     on_progress: F,
-) -> Result<(), SyncError> {
+) -> Result<PathBuf, SyncError> {
     std::fs::create_dir_all(cache_dir(request.workspace_root, request.project_key))?;
     let cached_path = cached_asset_path(
         request.workspace_root,
@@ -49,6 +54,28 @@ pub async fn sync_asset<F: FnMut(u64, u64)>(
         )
         .await?;
     }
+
+    Ok(cached_path)
+}
+
+/// Downloads/verifies the asset into the cache without activating it.
+pub async fn ensure_asset_cached<F: FnMut(u64, u64)>(
+    http: &reqwest::Client,
+    request: SyncRequest<'_>,
+    on_progress: F,
+) -> Result<(), SyncError> {
+    ensure_cached_copy(http, &request, on_progress).await?;
+    Ok(())
+}
+
+/// Downloads/verifies the asset (as `ensure_asset_cached` does) and then
+/// extracts it into the active build dir, making it the active build.
+pub async fn sync_asset<F: FnMut(u64, u64)>(
+    http: &reqwest::Client,
+    request: SyncRequest<'_>,
+    on_progress: F,
+) -> Result<(), SyncError> {
+    let cached_path = ensure_cached_copy(http, &request, on_progress).await?;
 
     let active = active_dir(request.workspace_root, request.project_key);
     extract_to_active(&cached_path, &active)?;
@@ -169,6 +196,56 @@ mod tests {
             std::fs::read_to_string(active.join("game.exe")).unwrap(),
             "binary-contents"
         );
+    }
+
+    #[tokio::test]
+    async fn ensure_asset_cached_downloads_but_never_activates_the_build() {
+        let zip_bytes = build_test_zip_bytes();
+        let server = MockServer::start().await;
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+        Mock::given(method("GET"))
+            .and(path("/asset.zip"))
+            .respond_with(move |_: &wiremock::Request| {
+                call_count_clone.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_bytes(zip_bytes.clone())
+            })
+            .mount(&server)
+            .await;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let http = reqwest::Client::new();
+        let zip_len = build_test_zip_bytes().len() as u64;
+        let download_url = format!("{}/asset.zip", server.uri());
+        let request = || SyncRequest {
+            workspace_root: workspace.path(),
+            project_key: "org/repo",
+            asset_id: 1,
+            asset_name: "asset.zip",
+            asset_size: zip_len,
+            download_url: &download_url,
+        };
+
+        ensure_asset_cached(&http, request(), |_, _| {})
+            .await
+            .unwrap();
+
+        let cached_path = cached_asset_path(workspace.path(), "org/repo", 1, "asset.zip");
+        assert!(
+            cached_path.exists(),
+            "the asset must be downloaded into the cache"
+        );
+        assert!(
+            !active_dir(workspace.path(), "org/repo").exists(),
+            "checking/downloading an asset must not create or populate the active dir"
+        );
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+
+        // A second check of an already-valid cached copy must not re-download.
+        ensure_asset_cached(&http, request(), |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     fn build_test_tar_gz_bytes() -> Vec<u8> {

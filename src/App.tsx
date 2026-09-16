@@ -25,7 +25,7 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
   const [activeExecutable, setActiveExecutable] = useState<string | null>(null);
   const [cachedAssetIds, setCachedAssetIds] = useState<Set<number>>(new Set());
   const [launchError, setLaunchError] = useState<string | null>(null);
-  const { state, sync } = useSync(projectKey);
+  const { state, sync, check } = useSync(projectKey);
 
   useEffect(() => {
     listReleasesForProject(projectKey)
@@ -45,9 +45,22 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
       .catch((error) => console.error("failed to list cached assets", error));
   }, [projectKey]);
 
-  const handleSync = async (release: Release, assetId: number) => {
+  // Picking an option activates it: download/verify, then extract as the
+  // active build. Only mark it active if the sync actually completed --
+  // `sync()` resolves false (without throwing) if it was skipped because
+  // another operation was already in flight.
+  const handleSelect = async (release: Release, assetId: number) => {
     const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
-    await sync(release, asset);
+    let succeeded = false;
+    try {
+      succeeded = await sync(release, asset);
+    } catch (error) {
+      console.error("failed to sync/activate build", error);
+      return;
+    }
+    if (!succeeded) {
+      return;
+    }
     setActiveReleaseTag(release.tag_name);
     setActiveAssetName(asset.name);
     setCachedAssetIds((prev) => new Set(prev).add(assetId));
@@ -55,6 +68,20 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
       setActiveExecutable(await getActiveExecutable(projectKey));
     } catch (error) {
       console.error("failed to look up active executable", error);
+    }
+  };
+
+  // Sync/Check only ensures a valid cached copy exists -- it never touches
+  // the active build.
+  const handleCheck = async (release: Release, assetId: number) => {
+    const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
+    try {
+      const succeeded = await check(asset);
+      if (succeeded) {
+        setCachedAssetIds((prev) => new Set(prev).add(assetId));
+      }
+    } catch (error) {
+      console.error("failed to check/download build", error);
     }
   };
 
@@ -95,7 +122,8 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
         activeReleaseTag={activeReleaseTag}
         activeAssetName={activeAssetName}
         cachedAssetIds={cachedAssetIds}
-        onSync={handleSync}
+        onSelect={handleSelect}
+        onCheck={handleCheck}
         onDelete={handleDelete}
       />
       <ClearCacheButton projectKey={projectKey} onCleared={() => setCachedAssetIds(new Set())} />

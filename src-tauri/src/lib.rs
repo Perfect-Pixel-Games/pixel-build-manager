@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use sync::cache::{active_dir, cache_dir, cached_asset_path, list_cached_asset_ids};
 use sync::launch::{find_active_executable, launch_executable};
-use sync::orchestrator::{sync_asset, SyncRequest};
+use sync::orchestrator::{ensure_asset_cached, sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
 
 const GITHUB_CLIENT_ID: &str = "Ov23ligQDGOJvlWsEXJc";
@@ -271,6 +271,71 @@ async fn sync_release_asset_inner(
     })
 }
 
+// Downloads/verifies the asset into the cache, same as sync_release_asset,
+// but never extracts it into the active build dir or records it as active --
+// this is the "Check"/"Sync" button's action, kept deliberately separate
+// from picking an option (which does activate it).
+#[tauri::command]
+async fn check_release_asset(
+    app: tauri::AppHandle,
+    project_key: String,
+    asset_id: u64,
+    asset_name: String,
+    asset_size: u64,
+    download_url: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    begin_operation(&state, &project_key)?;
+    let result = check_release_asset_inner(
+        app,
+        &project_key,
+        asset_id,
+        &asset_name,
+        asset_size,
+        &download_url,
+        &state,
+    )
+    .await;
+    end_operation(&state, &project_key);
+    result
+}
+
+async fn check_release_asset_inner(
+    app: tauri::AppHandle,
+    project_key: &str,
+    asset_id: u64,
+    asset_name: &str,
+    asset_size: u64,
+    download_url: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let workspace_root = workspace_root_from_settings(state)?;
+
+    let http = reqwest::Client::new();
+    let request = SyncRequest {
+        workspace_root: &workspace_root,
+        project_key,
+        asset_id,
+        asset_name,
+        asset_size,
+        download_url,
+    };
+
+    let project_key_for_events = project_key.to_string();
+    ensure_asset_cached(&http, request, move |downloaded, total| {
+        let _ = app.emit(
+            "sync-progress",
+            SyncProgressPayload {
+                project_key: project_key_for_events.clone(),
+                downloaded,
+                total,
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ActiveRelease {
     release_tag: Option<String>,
@@ -408,6 +473,7 @@ pub fn run() {
             get_workspace_root,
             set_workspace_root,
             sync_release_asset,
+            check_release_asset,
             get_active_release,
             clear_project_cache,
             list_cached_assets,

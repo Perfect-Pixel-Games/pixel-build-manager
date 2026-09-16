@@ -6,7 +6,10 @@ type Props = {
   activeReleaseTag: string | null;
   activeAssetName: string | null;
   cachedAssetIds: Set<number>;
-  onSync: (release: Release, assetId: number) => void;
+  /** Picking an option activates it: downloads/verifies it, then extracts it as the active build. */
+  onSelect: (release: Release, assetId: number) => void;
+  /** Sync/Check only downloads/verifies the cached copy -- it never changes the active build. */
+  onCheck: (release: Release, assetId: number) => void;
   onDelete: (release: Release, assetId: number) => void;
 };
 
@@ -36,7 +39,8 @@ export function ReleaseList({
   activeReleaseTag,
   activeAssetName,
   cachedAssetIds,
-  onSync,
+  onSelect,
+  onCheck,
   onDelete,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -60,14 +64,14 @@ export function ReleaseList({
         <ul>
           {options.map(({ release, asset, isActive }) => (
             <li key={`${release.id}-${asset.id}`}>
-              <button onClick={() => onSync(release, asset.id)}>
+              <button onClick={() => onSelect(release, asset.id)}>
                 {optionLabel({ release, asset, isActive })}
                 {isActive && <strong> (Active)</strong>}
               </button>
               <button
                 aria-label={`Sync ${asset.name}`}
                 title={cachedAssetIds.has(asset.id) ? "Already downloaded -- check for a fresh copy" : "Sync"}
-                onClick={() => onSync(release, asset.id)}
+                onClick={() => onCheck(release, asset.id)}
               >
                 {cachedAssetIds.has(asset.id) ? "Check" : "Sync"}
               </button>

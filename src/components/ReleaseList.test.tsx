@@ -21,6 +21,8 @@ function openDropdown() {
   fireEvent.click(screen.getByRole("button", { expanded: false }));
 }
 
+const noop = () => {};
+
 describe("ReleaseList", () => {
   it("shows a placeholder on the dropdown toggle when nothing is active", () => {
     render(
@@ -29,8 +31,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -44,8 +47,9 @@ describe("ReleaseList", () => {
         activeReleaseTag="0.2.14"
         activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -62,8 +66,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -82,8 +87,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -123,8 +129,9 @@ describe("ReleaseList", () => {
         activeReleaseTag="0.2.14"
         activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -143,8 +150,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -165,8 +173,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -181,16 +190,18 @@ describe("ReleaseList", () => {
     expect(notYetDownloadedButton).toHaveTextContent("Sync");
   });
 
-  it("syncs/checks the build when its option is selected from the list", () => {
-    const onSync = vi.fn();
+  it("calls onSelect (activating the build) when its option label is clicked", () => {
+    const onSelect = vi.fn();
+    const onCheck = vi.fn();
     render(
       <ReleaseList
         releases={releases}
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
-        onSync={onSync}
-        onDelete={() => {}}
+        onSelect={onSelect}
+        onCheck={onCheck}
+        onDelete={noop}
       />,
     );
 
@@ -199,7 +210,8 @@ describe("ReleaseList", () => {
       screen.getByRole("button", { name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping" }),
     );
 
-    expect(onSync).toHaveBeenCalledWith(releases[0], 10);
+    expect(onSelect).toHaveBeenCalledWith(releases[0], 10);
+    expect(onCheck).not.toHaveBeenCalled();
   });
 
   it("selecting an option does not itself change which build is shown as active", () => {
@@ -209,8 +221,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 
@@ -222,23 +235,26 @@ describe("ReleaseList", () => {
     expect(screen.getByRole("button", { expanded: true })).toHaveTextContent("No active build");
   });
 
-  it("still calls onSync (to re-check/re-download) when the Check button is clicked", () => {
-    const onSync = vi.fn();
+  it("calls onCheck (not onSelect) when the Sync/Check button is clicked", () => {
+    const onSelect = vi.fn();
+    const onCheck = vi.fn();
     render(
       <ReleaseList
         releases={releases}
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
-        onSync={onSync}
-        onDelete={() => {}}
+        onSelect={onSelect}
+        onCheck={onCheck}
+        onDelete={noop}
       />,
     );
 
     openDropdown();
     fireEvent.click(screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" }));
 
-    expect(onSync).toHaveBeenCalledWith(releases[0], 10);
+    expect(onCheck).toHaveBeenCalledWith(releases[0], 10);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("calls onDelete with the release and asset id when delete is clicked", () => {
@@ -249,7 +265,8 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
-        onSync={() => {}}
+        onSelect={noop}
+        onCheck={noop}
         onDelete={onDelete}
       />,
     );
@@ -269,8 +286,9 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
-        onSync={() => {}}
-        onDelete={() => {}}
+        onSelect={noop}
+        onCheck={noop}
+        onDelete={noop}
       />,
     );
 

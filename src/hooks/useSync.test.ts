@@ -26,26 +26,53 @@ describe("useSync", () => {
     vi.mocked(syncApi.onSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
   });
 
-  it("transitions to done after a successful sync", async () => {
+  it("transitions to done and resolves true after a successful sync", async () => {
     vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
     const { result } = renderHook(() => useSync("org/repo"));
 
+    let succeeded: boolean | undefined;
     await act(async () => {
-      await result.current.sync(release, asset);
+      succeeded = await result.current.sync(release, asset);
     });
 
+    expect(succeeded).toBe(true);
     expect(result.current.state).toEqual({ phase: "done" });
   });
 
-  it("transitions to error when the sync call rejects", async () => {
+  it("transitions to error and rethrows when the sync call rejects", async () => {
     vi.mocked(syncApi.syncReleaseAsset).mockRejectedValue(new Error("network down"));
     const { result } = renderHook(() => useSync("org/repo"));
 
     await act(async () => {
-      await result.current.sync(release, asset);
+      await expect(result.current.sync(release, asset)).rejects.toThrow("network down");
     });
 
     expect(result.current.state).toEqual({ phase: "error", message: "Error: network down" });
+  });
+
+  it("transitions to done and resolves true after a successful check", async () => {
+    vi.mocked(syncApi.checkReleaseAsset).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    let succeeded: boolean | undefined;
+    await act(async () => {
+      succeeded = await result.current.check(asset);
+    });
+
+    expect(succeeded).toBe(true);
+    expect(syncApi.checkReleaseAsset).toHaveBeenCalledWith("org/repo", asset);
+    expect(result.current.state).toEqual({ phase: "done" });
+  });
+
+  it("transitions to error and rethrows when the check call rejects", async () => {
+    vi.mocked(syncApi.checkReleaseAsset).mockRejectedValue(new Error("disk full"));
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    await act(async () => {
+      await expect(result.current.check(asset)).rejects.toThrow("disk full");
+    });
+
+    expect(result.current.state).toEqual({ phase: "error", message: "Error: disk full" });
   });
 
   it("updates progress only for matching project_key events", async () => {
@@ -73,7 +100,7 @@ describe("useSync", () => {
     );
   });
 
-  it("ignores a second sync() call while one is already in flight", async () => {
+  it("ignores a second sync() call while one is already in flight, resolving it to false", async () => {
     let resolveFirstSync: () => void = () => {};
     vi.mocked(syncApi.syncReleaseAsset).mockImplementation(
       () =>
@@ -83,20 +110,24 @@ describe("useSync", () => {
     );
     const { result } = renderHook(() => useSync("org/repo"));
 
+    let firstCall!: Promise<boolean>;
+    let secondCall!: Promise<boolean>;
     act(() => {
-      result.current.sync(release, asset);
+      firstCall = result.current.sync(release, asset);
     });
     act(() => {
       // Second call while the first is still pending -- should be a no-op.
-      result.current.sync(release, asset);
+      secondCall = result.current.sync(release, asset);
     });
 
     expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1);
+    await expect(secondCall).resolves.toBe(false);
 
     await act(async () => {
       resolveFirstSync();
     });
 
+    await expect(firstCall).resolves.toBe(true);
     expect(result.current.state).toEqual({ phase: "done" });
 
     // Once the first call has finished, sync() should work again.
@@ -105,5 +136,18 @@ describe("useSync", () => {
       await result.current.sync(release, asset);
     });
     expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a check() call while a sync() is already in flight (shared guard)", async () => {
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(() => new Promise(() => {}));
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    act(() => {
+      result.current.sync(release, asset);
+    });
+    const checkResult = await act(async () => result.current.check(asset));
+
+    expect(checkResult).toBe(false);
+    expect(syncApi.checkReleaseAsset).not.toHaveBeenCalled();
   });
 });
