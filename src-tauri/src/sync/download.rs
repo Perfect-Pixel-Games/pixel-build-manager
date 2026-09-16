@@ -10,6 +10,8 @@ pub enum DownloadError {
     Network(#[from] reqwest::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("download failed with HTTP {status}: {body}")]
+    Http { status: u16, body: String },
     #[error("downloaded size {actual} does not match expected size {expected}")]
     SizeMismatch { expected: u64, actual: u64 },
 }
@@ -26,6 +28,13 @@ pub async fn download_with_progress<F: FnMut(u64, u64)>(
         .header("User-Agent", "pixel-build-manager")
         .send()
         .await?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        return Err(DownloadError::Http { status, body });
+    }
+
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(destination).await?;
     let mut downloaded: u64 = 0;
@@ -112,6 +121,35 @@ mod tests {
                 expected: 999,
                 actual: 10
             })
+        ));
+        assert!(!destination.exists());
+    }
+
+    #[tokio::test]
+    async fn non_success_status_errors_before_writing_the_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/asset.zip"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset.zip");
+        let http = reqwest::Client::new();
+
+        let result = download_with_progress(
+            &http,
+            &format!("{}/asset.zip", server.uri()),
+            &destination,
+            1000,
+            |_, _| {},
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(DownloadError::Http { status: 404, .. })
         ));
         assert!(!destination.exists());
     }
