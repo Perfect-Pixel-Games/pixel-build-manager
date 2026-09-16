@@ -1,8 +1,3 @@
-// ProjectSettings::active_release_tag/active_asset_name aren't read/written
-// outside tests until Phase 3's sync commands land, so clippy would otherwise
-// flag them as dead code under `-D warnings`.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

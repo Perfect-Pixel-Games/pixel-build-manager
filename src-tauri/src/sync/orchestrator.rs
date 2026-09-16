@@ -1,8 +1,3 @@
-// `sync_asset` isn't called from anywhere until later tasks wire up the sync
-// commands, so clippy would otherwise flag it (and its supporting types) as
-// dead code under `-D warnings`.
-#![allow(dead_code)]
-
 use crate::sync::cache::{active_dir, cache_dir, cached_asset_path};
 use crate::sync::download::{download_with_progress, DownloadError};
 use crate::sync::extract::{extract_zip_to_active, ExtractError};

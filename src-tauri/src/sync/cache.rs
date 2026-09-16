@@ -1,8 +1,3 @@
-// These path-computation functions aren't called from anywhere until later tasks
-// wire up the sync commands, so clippy would otherwise flag them as dead code
-// under `-D warnings`.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 /// Turns an "owner/repo" project key into a project directory nested as
