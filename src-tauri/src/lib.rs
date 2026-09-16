@@ -1,6 +1,7 @@
 mod auth;
 mod github;
 mod settings;
+mod sync;
 
 use auth::device_flow::DeviceFlowClient;
 use auth::login::{perform_device_login, LoginStatus};
