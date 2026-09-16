@@ -92,7 +92,7 @@ function App() {
         Log out
       </button>
       <ProjectList projects={projects} onSelect={setSelectedProject} onToggleFavorite={handleToggleFavorite} />
-      {selectedProject && <ProjectDetail projectKey={selectedProject} />}
+      {selectedProject && <ProjectDetail key={selectedProject} projectKey={selectedProject} />}
     </div>
   );
 }
