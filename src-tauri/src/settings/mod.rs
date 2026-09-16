@@ -35,6 +35,13 @@ impl Settings {
         let contents = serde_json::to_string_pretty(self).expect("Settings must serialize");
         std::fs::write(path, contents)
     }
+
+    pub fn set_favorite(&mut self, project_key: &str, favorite: bool) {
+        self.projects
+            .entry(project_key.to_string())
+            .or_default()
+            .favorite = favorite;
+    }
 }
 
 #[cfg(test)]
@@ -74,5 +81,18 @@ mod tests {
         let loaded = Settings::load_from(&path);
 
         assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn set_favorite_creates_entry_if_missing() {
+        let mut settings = Settings::default();
+
+        settings.set_favorite("pixel-perfect/last-beacon", true);
+
+        assert!(settings.projects["pixel-perfect/last-beacon"].favorite);
+
+        settings.set_favorite("pixel-perfect/last-beacon", false);
+
+        assert!(!settings.projects["pixel-perfect/last-beacon"].favorite);
     }
 }
