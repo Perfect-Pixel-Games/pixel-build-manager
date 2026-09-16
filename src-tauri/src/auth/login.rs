@@ -13,7 +13,9 @@ pub enum LoginStatus {
     Success,
     Denied,
     Expired,
-    Error(String),
+    Error {
+        error: String,
+    },
 }
 
 pub async fn perform_device_login<F: Fn(LoginStatus)>(
@@ -24,7 +26,9 @@ pub async fn perform_device_login<F: Fn(LoginStatus)>(
     let device_code = match client.request_device_code().await {
         Ok(device_code) => device_code,
         Err(e) => {
-            on_status(LoginStatus::Error(e.to_string()));
+            on_status(LoginStatus::Error {
+                error: e.to_string(),
+            });
             return Err(e);
         }
     };
@@ -43,7 +47,9 @@ pub async fn perform_device_login<F: Fn(LoginStatus)>(
             Ok(PollOutcome::AccessToken(token)) => {
                 if let Err(e) = token_store.save(&token) {
                     let err = AuthError::UnexpectedResponse(e);
-                    on_status(LoginStatus::Error(err.to_string()));
+                    on_status(LoginStatus::Error {
+                        error: err.to_string(),
+                    });
                     return Err(err);
                 }
                 on_status(LoginStatus::Success);
@@ -63,7 +69,9 @@ pub async fn perform_device_login<F: Fn(LoginStatus)>(
                 return Err(AuthError::Expired);
             }
             Err(other) => {
-                on_status(LoginStatus::Error(other.to_string()));
+                on_status(LoginStatus::Error {
+                    error: other.to_string(),
+                });
                 return Err(other);
             }
         }
@@ -94,6 +102,30 @@ mod tests {
         fn clear(&self) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    /// Tauri events are JSON-serialized before crossing the IPC boundary to
+    /// the frontend. A bare-tuple variant like `Error(String)` cannot be
+    /// represented under `#[serde(tag = "status")]` internal tagging (the
+    /// payload must serialize to an object so the tag can be merged in), so
+    /// `serde_json::to_value` on it fails silently at the `emit()` call site
+    /// in lib.rs (`let _ = app.emit(...)`) -- the frontend never receives an
+    /// error status at all. This test pins the actual wire format so that
+    /// regression is caught here instead of only in production.
+    #[test]
+    fn error_status_serializes_to_a_taggable_json_object() {
+        let value = serde_json::to_value(LoginStatus::Error {
+            error: "network error: connection refused".to_string(),
+        })
+        .expect("LoginStatus::Error must be JSON-serializable for Tauri's emit() to work");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "status": "error",
+                "error": "network error: connection refused"
+            })
+        );
     }
 
     #[tokio::test]
@@ -201,7 +233,7 @@ mod tests {
         assert!(result.is_err());
         let recorded = statuses.lock().unwrap();
         match recorded.last() {
-            Some(LoginStatus::Error(_)) => {}
+            Some(LoginStatus::Error { .. }) => {}
             other => panic!("expected LoginStatus::Error, got {:?}", other),
         }
     }
@@ -241,7 +273,7 @@ mod tests {
         assert!(result.is_err());
         let recorded = statuses.lock().unwrap();
         match recorded.last() {
-            Some(LoginStatus::Error(_)) => {}
+            Some(LoginStatus::Error { .. }) => {}
             other => panic!("expected LoginStatus::Error, got {:?}", other),
         }
     }
