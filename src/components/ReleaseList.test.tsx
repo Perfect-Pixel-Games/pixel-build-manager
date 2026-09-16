@@ -114,6 +114,45 @@ describe("ReleaseList", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows a checkmark instead of Sync for an asset that's already downloaded", () => {
+    render(
+      <ReleaseList
+        releases={releases}
+        activeReleaseTag={null}
+        activeAssetName={null}
+        cachedAssetIds={new Set([10])}
+        onSync={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    const syncButton = screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" });
+    expect(syncButton).toHaveTextContent("✓");
+
+    const notYetDownloadedButton = screen.getByRole("button", {
+      name: "Sync last-beacon-windows-x64-test.tar.gz",
+    });
+    expect(notYetDownloadedButton).toHaveTextContent("Sync");
+  });
+
+  it("still calls onSync (to re-check/re-download) when the checkmark button is clicked", () => {
+    const onSync = vi.fn();
+    render(
+      <ReleaseList
+        releases={releases}
+        activeReleaseTag={null}
+        activeAssetName={null}
+        cachedAssetIds={new Set([10])}
+        onSync={onSync}
+        onDelete={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" }));
+
+    expect(onSync).toHaveBeenCalledWith(releases[0], 10);
+  });
+
   it("calls onDelete with the release and asset id when delete is clicked", () => {
     const onDelete = vi.fn();
     render(

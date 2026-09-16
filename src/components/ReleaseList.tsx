@@ -31,8 +31,12 @@ export function ReleaseList({
                 {release.tag_name === activeReleaseTag && asset.name === activeAssetName && (
                   <strong> (Active)</strong>
                 )}
-                <button aria-label={`Sync ${asset.name}`} onClick={() => onSync(release, asset.id)}>
-                  Sync
+                <button
+                  aria-label={`Sync ${asset.name}`}
+                  title={cachedAssetIds.has(asset.id) ? "Already downloaded -- check for a fresh copy" : "Sync"}
+                  onClick={() => onSync(release, asset.id)}
+                >
+                  {cachedAssetIds.has(asset.id) ? "✓" : "Sync"}
                 </button>
                 {cachedAssetIds.has(asset.id) && (
                   <button
