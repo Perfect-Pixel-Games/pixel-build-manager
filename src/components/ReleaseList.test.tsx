@@ -51,7 +51,8 @@ describe("ReleaseList", () => {
 
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle).toHaveTextContent("LastBeacon 0.2.14");
-    expect(toggle).toHaveTextContent("last-beacon-windows-x64-shipping.tar.gz");
+    expect(toggle).toHaveTextContent("last-beacon-windows-x64-shipping");
+    expect(toggle).not.toHaveTextContent("last-beacon-windows-x64-shipping.tar.gz");
   });
 
   it("lists every asset of every release as an option once opened", () => {
@@ -66,12 +67,30 @@ describe("ReleaseList", () => {
       />,
     );
 
-    expect(screen.queryByText(/last-beacon-windows-x64-shipping\.tar\.gz/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/last-beacon-windows-x64-shipping/)).not.toBeInTheDocument();
 
     openDropdown();
 
-    expect(screen.getByText(/last-beacon-windows-x64-shipping\.tar\.gz/)).toBeInTheDocument();
-    expect(screen.getByText(/last-beacon-windows-x64-test\.tar\.gz/)).toBeInTheDocument();
+    expect(screen.getByText(/last-beacon-windows-x64-shipping/)).toBeInTheDocument();
+    expect(screen.getByText(/last-beacon-windows-x64-test/)).toBeInTheDocument();
+  });
+
+  it("strips the known archive extension from the displayed option label", () => {
+    render(
+      <ReleaseList
+        releases={releases}
+        activeReleaseTag={null}
+        activeAssetName={null}
+        cachedAssetIds={new Set()}
+        onSync={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    openDropdown();
+
+    expect(screen.getByText("LastBeacon 0.2.14 — last-beacon-windows-x64-shipping")).toBeInTheDocument();
+    expect(screen.queryByText(/\.tar\.gz/)).not.toBeInTheDocument();
   });
 
   it("only marks the active asset's own option, not every option sharing that asset name", () => {
@@ -111,7 +130,7 @@ describe("ReleaseList", () => {
 
     openDropdown();
 
-    const rows = screen.getAllByText(/last-beacon-windows-x64-shipping\.tar\.gz/).map((el) => el.closest("li"));
+    const rows = screen.getAllByText(/last-beacon-windows-x64-shipping/).map((el) => el.closest("li"));
     const activeRows = rows.filter((row) => row?.textContent?.includes("Active"));
     expect(activeRows).toHaveLength(1);
     expect(activeRows[0]).toHaveTextContent("LastBeacon 0.2.14");
@@ -176,7 +195,9 @@ describe("ReleaseList", () => {
     );
 
     openDropdown();
-    fireEvent.click(screen.getByRole("button", { name: /LastBeacon 0\.2\.14.*last-beacon-windows-x64-shipping\.tar\.gz/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping" }),
+    );
 
     expect(onSync).toHaveBeenCalledWith(releases[0], 10);
   });
@@ -195,9 +216,7 @@ describe("ReleaseList", () => {
 
     openDropdown();
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping.tar.gz",
-      }),
+      screen.getByRole("button", { name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping" }),
     );
 
     expect(screen.getByRole("button", { expanded: true })).toHaveTextContent("No active build");
@@ -256,10 +275,10 @@ describe("ReleaseList", () => {
     );
 
     openDropdown();
-    expect(screen.getByText(/last-beacon-windows-x64-shipping\.tar\.gz/)).toBeInTheDocument();
+    expect(screen.getByText(/last-beacon-windows-x64-shipping/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { expanded: true }));
 
-    expect(screen.queryByText(/last-beacon-windows-x64-shipping\.tar\.gz/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/last-beacon-windows-x64-shipping/)).not.toBeInTheDocument();
   });
 });

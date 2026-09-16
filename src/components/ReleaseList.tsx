@@ -16,9 +16,19 @@ type Option = {
   isActive: boolean;
 };
 
+// Checked longest-first so ".tar.gz" is stripped whole rather than leaving
+// a dangling ".tar" behind.
+const KNOWN_ARCHIVE_EXTENSIONS = [".tar.gz", ".zip"];
+
+function displayAssetName(assetName: string): string {
+  const lower = assetName.toLowerCase();
+  const extension = KNOWN_ARCHIVE_EXTENSIONS.find((ext) => lower.endsWith(ext));
+  return extension ? assetName.slice(0, -extension.length) : assetName;
+}
+
 function optionLabel({ release, asset }: Option): string {
   const releaseLabel = `${release.name ?? release.tag_name}${release.prerelease ? " (prerelease)" : ""}`;
-  return `${releaseLabel} — ${asset.name}`;
+  return `${releaseLabel} — ${displayAssetName(asset.name)}`;
 }
 
 export function ReleaseList({
