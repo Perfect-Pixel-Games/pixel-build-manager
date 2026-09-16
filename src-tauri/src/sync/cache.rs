@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Turns an "owner/repo" project key into a project directory nested as
 /// `<workspace_root>/<owner>/<repo>`. Nesting (rather than flattening the key
-/// into a single nameing-escaped directory component) is what actually makes
+/// into a single naming-escaped directory component) is what actually makes
 /// this collision-free: any string-based encoding scheme that joins owner and
 /// repo into one path segment risks two different owner/repo pairs colliding
 /// on the same encoded string whenever hyphens straddle the boundary between
@@ -15,11 +15,24 @@ use std::path::{Path, PathBuf};
 /// variant, both had live collisions). Separate filesystem directory
 /// components can never collide this way, since each level is stored as a
 /// distinct entry rather than concatenated into one string.
+///
+/// This guarantee holds precisely when `owner` and `repo` are each non-empty
+/// and contain neither `/` nor `\` themselves -- exactly what GitHub
+/// guarantees for the `owner`/`repo` halves of a repo's `full_name`, which is
+/// the only source `project_key` comes from in this app. Debug builds assert
+/// that precondition rather than silently falling back to something that
+/// could collide (an empty owner/repo, or a key with no `/` at all).
 pub fn project_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
-    match project_key.split_once('/') {
-        Some((owner, repo)) => workspace_root.join(owner).join(repo),
-        None => workspace_root.join(project_key),
-    }
+    let (owner, repo) = project_key
+        .split_once('/')
+        .expect("project_key must be of the form \"owner/repo\"");
+    debug_assert!(!owner.is_empty(), "project_key owner must not be empty");
+    debug_assert!(!repo.is_empty(), "project_key repo must not be empty");
+    debug_assert!(
+        !owner.contains(['/', '\\']) && !repo.contains(['/', '\\']),
+        "project_key owner/repo must not themselves contain a path separator"
+    );
+    workspace_root.join(owner).join(repo)
 }
 
 pub fn cache_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
