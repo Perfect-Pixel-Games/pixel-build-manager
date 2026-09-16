@@ -1,7 +1,3 @@
-// Not yet wired into any Tauri command (that lands later in Phase 2), so
-// clippy would otherwise flag these as dead code under `-D warnings`.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

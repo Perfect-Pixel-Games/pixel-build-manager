@@ -9,7 +9,7 @@ use github::client::{GithubClient, ReleaseSummary};
 use serde::Serialize;
 use settings::Settings;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 const GITHUB_CLIENT_ID: &str = "REPLACE_WITH_YOUR_GITHUB_OAUTH_APP_CLIENT_ID";
@@ -17,6 +17,9 @@ const GITHUB_CLIENT_ID: &str = "REPLACE_WITH_YOUR_GITHUB_OAUTH_APP_CLIENT_ID";
 pub struct AppState {
     pub token_store: Arc<dyn TokenStore>,
     pub settings_path: PathBuf,
+    /// Serializes settings.json read-modify-write cycles across commands so
+    /// concurrent writes (e.g. rapid favorite toggles) can't clobber each other.
+    pub settings_lock: Mutex<()>,
 }
 
 fn settings_path_for(app: &tauri::AppHandle) -> PathBuf {
@@ -123,6 +126,7 @@ fn toggle_favorite(
     favorite: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
     let mut settings = Settings::load_from(&state.settings_path);
     settings.set_favorite(&full_name, favorite);
     settings
@@ -139,6 +143,7 @@ pub fn run() {
             app.manage(AppState {
                 token_store: Arc::new(KeyringTokenStore),
                 settings_path,
+                settings_lock: Mutex::new(()),
             });
             Ok(())
         })

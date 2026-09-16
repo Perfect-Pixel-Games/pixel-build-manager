@@ -1,5 +1,6 @@
-// Not yet wired into any Tauri command (that lands in Phase 2), so clippy
-// would otherwise flag these as dead code under `-D warnings`.
+// ProjectSettings::active_release_tag/active_asset_name aren't read/written
+// outside tests until Phase 3's sync commands land, so clippy would otherwise
+// flag them as dead code under `-D warnings`.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
