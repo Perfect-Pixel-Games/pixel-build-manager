@@ -1,6 +1,6 @@
 use crate::sync::cache::{active_dir, cache_dir, cached_asset_path};
 use crate::sync::download::{download_with_progress, DownloadError};
-use crate::sync::extract::{extract_zip_to_active, ExtractError};
+use crate::sync::extract::{extract_to_active, ExtractError};
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -47,7 +47,7 @@ pub async fn sync_asset<F: FnMut(u64, u64)>(
     }
 
     let active = active_dir(request.workspace_root, request.project_key);
-    extract_zip_to_active(&cached_path, &active)?;
+    extract_to_active(&cached_path, &active)?;
 
     Ok(())
 }
@@ -116,6 +116,56 @@ mod tests {
             call_count.load(Ordering::SeqCst),
             1,
             "second sync of the same asset must not re-download"
+        );
+    }
+
+    fn build_test_tar_gz_bytes() -> Vec<u8> {
+        let mut buffer = Vec::new();
+        {
+            let encoder =
+                flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+            let contents = b"binary-contents";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "game.exe", &contents[..])
+                .unwrap();
+            builder.finish().unwrap();
+        }
+        buffer
+    }
+
+    #[tokio::test]
+    async fn syncs_a_tar_gz_asset_end_to_end() {
+        let tar_gz_bytes = build_test_tar_gz_bytes();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/asset.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(tar_gz_bytes.clone()))
+            .mount(&server)
+            .await;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let http = reqwest::Client::new();
+        let download_url = format!("{}/asset.tar.gz", server.uri());
+        let request = SyncRequest {
+            workspace_root: workspace.path(),
+            project_key: "org/repo",
+            asset_id: 1,
+            asset_name: "asset.tar.gz",
+            asset_size: tar_gz_bytes.len() as u64,
+            download_url: &download_url,
+        };
+
+        sync_asset(&http, request, |_, _| {}).await.unwrap();
+
+        let active = active_dir(workspace.path(), "org/repo");
+        assert_eq!(
+            std::fs::read_to_string(active.join("game.exe")).unwrap(),
+            "binary-contents"
         );
     }
 }
