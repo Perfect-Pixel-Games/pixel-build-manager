@@ -162,6 +162,47 @@ describe("ReleaseList", () => {
     expect(notYetDownloadedButton).toHaveTextContent("Sync");
   });
 
+  it("syncs/checks the build when its option is selected from the list", () => {
+    const onSync = vi.fn();
+    render(
+      <ReleaseList
+        releases={releases}
+        activeReleaseTag={null}
+        activeAssetName={null}
+        cachedAssetIds={new Set()}
+        onSync={onSync}
+        onDelete={() => {}}
+      />,
+    );
+
+    openDropdown();
+    fireEvent.click(screen.getByRole("button", { name: /LastBeacon 0\.2\.14.*last-beacon-windows-x64-shipping\.tar\.gz/ }));
+
+    expect(onSync).toHaveBeenCalledWith(releases[0], 10);
+  });
+
+  it("selecting an option does not itself change which build is shown as active", () => {
+    render(
+      <ReleaseList
+        releases={releases}
+        activeReleaseTag={null}
+        activeAssetName={null}
+        cachedAssetIds={new Set()}
+        onSync={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    openDropdown();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping.tar.gz",
+      }),
+    );
+
+    expect(screen.getByRole("button", { expanded: true })).toHaveTextContent("No active build");
+  });
+
   it("still calls onSync (to re-check/re-download) when the Check button is clicked", () => {
     const onSync = vi.fn();
     render(

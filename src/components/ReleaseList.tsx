@@ -50,10 +50,10 @@ export function ReleaseList({
         <ul>
           {options.map(({ release, asset, isActive }) => (
             <li key={`${release.id}-${asset.id}`}>
-              <span>
+              <button onClick={() => onSync(release, asset.id)}>
                 {optionLabel({ release, asset, isActive })}
                 {isActive && <strong> (Active)</strong>}
-              </span>
+              </button>
               <button
                 aria-label={`Sync ${asset.name}`}
                 title={cachedAssetIds.has(asset.id) ? "Already downloaded -- check for a fresh copy" : "Sync"}
