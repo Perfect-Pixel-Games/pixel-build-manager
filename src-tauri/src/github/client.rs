@@ -1,6 +1,9 @@
+// Not yet wired into any Tauri command (that lands later in Phase 2), so
+// clippy would otherwise flag these as dead code under `-D warnings`.
+#![allow(dead_code)]
+
 use serde::Deserialize;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct RepoSummary {
     pub name: String,
@@ -8,13 +11,11 @@ pub struct RepoSummary {
     pub owner: RepoOwner,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct RepoOwner {
     pub login: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum GithubError {
     #[error("network error: {0}")]
@@ -23,7 +24,6 @@ pub enum GithubError {
     Api { status: u16, body: String },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GithubClient {
     http: reqwest::Client,
@@ -31,7 +31,6 @@ pub struct GithubClient {
     token: String,
 }
 
-#[allow(dead_code)]
 impl GithubClient {
     pub fn new(token: String) -> Self {
         Self::with_base_url(token, "https://api.github.com".to_string())
