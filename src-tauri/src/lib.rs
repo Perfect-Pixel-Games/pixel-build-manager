@@ -32,14 +32,11 @@ async fn login_start(
     let app_for_events = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = perform_device_login(
-            &client,
-            token_store.as_ref(),
-            move |status: LoginStatus| {
+        if let Err(e) =
+            perform_device_login(&client, token_store.as_ref(), move |status: LoginStatus| {
                 let _ = app_for_events.emit("login-status", status);
-            },
-        )
-        .await
+            })
+            .await
         {
             eprintln!("device login failed: {e}");
         }

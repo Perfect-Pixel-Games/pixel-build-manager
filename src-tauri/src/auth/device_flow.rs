@@ -54,14 +54,19 @@ impl DeviceFlowClient {
             .http
             .post(&url)
             .header("Accept", "application/json")
-            .form(&[("client_id", self.client_id.as_str()), ("scope", "repo read:org")])
+            .form(&[
+                ("client_id", self.client_id.as_str()),
+                ("scope", "repo read:org"),
+            ])
             .send()
             .await?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AuthError::UnexpectedResponse(format!("HTTP {status}: {body}")));
+            return Err(AuthError::UnexpectedResponse(format!(
+                "HTTP {status}: {body}"
+            )));
         }
 
         response
@@ -93,7 +98,9 @@ impl DeviceFlowClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AuthError::UnexpectedResponse(format!("HTTP {status}: {body}")));
+            return Err(AuthError::UnexpectedResponse(format!(
+                "HTTP {status}: {body}"
+            )));
         }
 
         let raw: RawResponse = response
