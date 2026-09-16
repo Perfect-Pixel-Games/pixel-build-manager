@@ -21,7 +21,13 @@ pub async fn perform_device_login<F: Fn(LoginStatus)>(
     token_store: &dyn TokenStore,
     on_status: F,
 ) -> Result<(), AuthError> {
-    let device_code = client.request_device_code().await?;
+    let device_code = match client.request_device_code().await {
+        Ok(device_code) => device_code,
+        Err(e) => {
+            on_status(LoginStatus::Error(e.to_string()));
+            return Err(e);
+        }
+    };
 
     on_status(LoginStatus::AwaitingUser {
         user_code: device_code.user_code.clone(),
@@ -171,6 +177,33 @@ mod tests {
         assert_eq!(token_store.load().unwrap(), None);
         let recorded = statuses.lock().unwrap();
         assert_eq!(recorded.last(), Some(&LoginStatus::Denied));
+    }
+
+    #[tokio::test]
+    async fn device_code_request_failure_reports_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login/device/code"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&server)
+            .await;
+
+        let client = DeviceFlowClient::with_base_url("bad-client-id".to_string(), server.uri());
+        let token_store = InMemoryTokenStore::new();
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let statuses_clone = statuses.clone();
+
+        let result = perform_device_login(&client, &token_store, move |status| {
+            statuses_clone.lock().unwrap().push(status);
+        })
+        .await;
+
+        assert!(result.is_err());
+        let recorded = statuses.lock().unwrap();
+        match recorded.last() {
+            Some(LoginStatus::Error(_)) => {}
+            other => panic!("expected LoginStatus::Error, got {:?}", other),
+        }
     }
 
     #[tokio::test]
