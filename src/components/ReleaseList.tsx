@@ -19,7 +19,9 @@ export function ReleaseList({ releases, activeAssetName, onSync }: Props) {
               <li key={asset.id}>
                 {asset.name}
                 {asset.name === activeAssetName && <strong> (Active)</strong>}
-                <button onClick={() => onSync(release, asset.id)}>Sync</button>
+                <button aria-label={`Sync ${asset.name}`} onClick={() => onSync(release, asset.id)}>
+                  Sync
+                </button>
               </li>
             ))}
           </ul>
