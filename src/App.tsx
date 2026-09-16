@@ -3,6 +3,7 @@ import { isLoggedIn, logout } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { getWorkspaceRoot } from "./api/settings";
 import { getActiveRelease } from "./api/sync";
+import { ClearCacheButton } from "./components/ClearCacheButton";
 import { Login } from "./components/Login";
 import { ProjectList } from "./components/ProjectList";
 import { ReleaseList } from "./components/ReleaseList";
@@ -35,6 +36,7 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
     <div>
       <SyncStatus state={state} />
       <ReleaseList releases={releases} activeAssetName={activeAssetName} onSync={handleSync} />
+      <ClearCacheButton projectKey={projectKey} />
     </div>
   );
 }
