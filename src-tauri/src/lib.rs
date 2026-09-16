@@ -11,6 +11,8 @@ use serde::Serialize;
 use settings::Settings;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use sync::cache::cache_dir;
+use sync::orchestrator::{sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
 
 const GITHUB_CLIENT_ID: &str = "REPLACE_WITH_YOUR_GITHUB_OAUTH_APP_CLIENT_ID";
@@ -153,6 +155,102 @@ fn set_workspace_root(root: String, state: tauri::State<'_, AppState>) -> Result
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SyncProgressPayload {
+    project_key: String,
+    downloaded: u64,
+    total: u64,
+}
+
+// Each parameter here is a distinct argument the frontend passes via
+// `invoke`, mirroring the asset/release fields it already has on hand;
+// bundling them into a struct would just move the same field count behind
+// an extra layer without reducing what callers need to supply.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+async fn sync_release_asset(
+    app: tauri::AppHandle,
+    project_key: String,
+    release_tag: String,
+    asset_id: u64,
+    asset_name: String,
+    asset_size: u64,
+    download_url: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = Settings::load_from(&state.settings_path);
+    let workspace_root = settings
+        .workspace_root
+        .clone()
+        .ok_or_else(|| "workspace root not set".to_string())?;
+
+    let http = reqwest::Client::new();
+    let request = SyncRequest {
+        workspace_root: &workspace_root,
+        project_key: &project_key,
+        asset_id,
+        asset_name: &asset_name,
+        asset_size,
+        download_url: &download_url,
+    };
+
+    let project_key_for_events = project_key.clone();
+    sync_asset(&http, request, move |downloaded, total| {
+        let _ = app.emit(
+            "sync-progress",
+            SyncProgressPayload {
+                project_key: project_key_for_events.clone(),
+                downloaded,
+                total,
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_active_release(&project_key, &release_tag, &asset_name);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ActiveRelease {
+    release_tag: Option<String>,
+    asset_name: Option<String>,
+}
+
+#[tauri::command]
+fn get_active_release(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ActiveRelease, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    let project = settings.projects.get(&project_key);
+    Ok(ActiveRelease {
+        release_tag: project.and_then(|p| p.active_release_tag.clone()),
+        asset_name: project.and_then(|p| p.active_asset_name.clone()),
+    })
+}
+
+#[tauri::command]
+fn clear_project_cache(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = Settings::load_from(&state.settings_path);
+    let workspace_root = settings
+        .workspace_root
+        .ok_or_else(|| "workspace root not set".to_string())?;
+    let dir = cache_dir(&workspace_root, &project_key);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -175,7 +273,10 @@ pub fn run() {
             list_releases_for_project,
             toggle_favorite,
             get_workspace_root,
-            set_workspace_root
+            set_workspace_root,
+            sync_release_asset,
+            get_active_release,
+            clear_project_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
