@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Release, ReleaseAsset } from "../api/projects";
 
 type Props = {
@@ -29,9 +29,8 @@ function displayAssetName(assetName: string): string {
   return extension ? assetName.slice(0, -extension.length) : assetName;
 }
 
-function optionLabel({ release, asset }: Option): string {
-  const releaseLabel = `${release.name ?? release.tag_name}${release.prerelease ? " (prerelease)" : ""}`;
-  return `${releaseLabel} — ${displayAssetName(asset.name)}`;
+function releaseLabel(release: Release): string {
+  return `${release.name ?? release.tag_name}${release.prerelease ? " (prerelease)" : ""}`;
 }
 
 export function ReleaseList({
@@ -44,48 +43,101 @@ export function ReleaseList({
   onDelete,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [buildType, setBuildType] = useState<string | null>(null);
+
+  // A project's asset file name is stable across every release of that
+  // variant (only the release/tag differs between versions of "the same
+  // build"), so the set of distinct asset names a project has ever
+  // published *is* its set of build types -- no per-project naming
+  // convention to parse, which matters since every project's naming
+  // differs (test/shipping, platform, arch, etc.).
+  const buildTypes = useMemo(() => {
+    const names = new Set<string>();
+    for (const release of releases) {
+      for (const asset of release.assets) {
+        names.add(asset.name);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [releases]);
+
+  // Default to the active build's type when there is one; otherwise, only
+  // auto-pick when there's no ambiguity (a single build type). Never
+  // overrides a choice the user already made.
+  useEffect(() => {
+    if (buildType !== null) {
+      return;
+    }
+    if (activeAssetName && buildTypes.includes(activeAssetName)) {
+      setBuildType(activeAssetName);
+    } else if (buildTypes.length === 1) {
+      setBuildType(buildTypes[0]);
+    }
+  }, [buildTypes, activeAssetName, buildType]);
 
   const options: Option[] = releases.flatMap((release) =>
-    release.assets.map((asset) => ({
-      release,
-      asset,
-      isActive: release.tag_name === activeReleaseTag && asset.name === activeAssetName,
-    })),
+    release.assets
+      .filter((asset) => asset.name === buildType)
+      .map((asset) => ({
+        release,
+        asset,
+        isActive: release.tag_name === activeReleaseTag && asset.name === activeAssetName,
+      })),
   );
 
   const activeOption = options.find((option) => option.isActive);
 
   return (
     <div>
-      <button aria-expanded={open} onClick={() => setOpen((prev) => !prev)}>
-        {activeOption ? optionLabel(activeOption) : "No active build"} {open ? "▴" : "▾"}
-      </button>
-      {open && (
-        <ul>
-          {options.map(({ release, asset, isActive }) => (
-            <li key={`${release.id}-${asset.id}`}>
-              <button onClick={() => onSelect(release, asset.id)}>
-                {optionLabel({ release, asset, isActive })}
-                {isActive && <strong> (Active)</strong>}
-              </button>
-              <button
-                aria-label={`Sync ${asset.name}`}
-                title={cachedAssetIds.has(asset.id) ? "Already downloaded -- check for a fresh copy" : "Sync"}
-                onClick={() => onCheck(release, asset.id)}
-              >
-                {cachedAssetIds.has(asset.id) ? "Check" : "Sync"}
-              </button>
-              {cachedAssetIds.has(asset.id) && (
-                <button
-                  aria-label={`Delete downloaded ${asset.name}`}
-                  onClick={() => onDelete(release, asset.id)}
-                >
-                  Delete
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+      <select
+        aria-label="Build type"
+        value={buildType ?? ""}
+        onChange={(event) => setBuildType(event.target.value || null)}
+      >
+        <option value="" disabled>
+          Select a build type
+        </option>
+        {buildTypes.map((name) => (
+          <option key={name} value={name}>
+            {displayAssetName(name)}
+          </option>
+        ))}
+      </select>
+      {buildType === null ? (
+        buildTypes.length > 0 && <p>Select a build type to see available versions.</p>
+      ) : (
+        <div>
+          <button aria-expanded={open} onClick={() => setOpen((prev) => !prev)}>
+            {activeOption ? releaseLabel(activeOption.release) : "No active build"} {open ? "▴" : "▾"}
+          </button>
+          {open && (
+            <ul>
+              {options.map(({ release, asset, isActive }) => (
+                <li key={`${release.id}-${asset.id}`}>
+                  <button aria-label={releaseLabel(release)} onClick={() => onSelect(release, asset.id)}>
+                    {releaseLabel(release)}
+                    {isActive && <strong> (Active)</strong>}
+                  </button>
+                  <button
+                    aria-label={`Sync ${asset.name}`}
+                    title={cachedAssetIds.has(asset.id) ? "Already downloaded -- check for a fresh copy" : "Sync"}
+                    onClick={() => onCheck(release, asset.id)}
+                  >
+                    {cachedAssetIds.has(asset.id) ? "Check" : "Sync"}
+                  </button>
+                  {cachedAssetIds.has(asset.id) && (
+                    <button
+                      aria-label={`Delete downloaded ${asset.name}`}
+                      onClick={() => onDelete(release, asset.id)}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

@@ -21,9 +21,166 @@ function openDropdown() {
   fireEvent.click(screen.getByRole("button", { expanded: false }));
 }
 
+function selectBuildType(name: string) {
+  fireEvent.change(screen.getByLabelText("Build type"), { target: { value: name } });
+}
+
 const noop = () => {};
 
 describe("ReleaseList", () => {
+  describe("build type selector", () => {
+    it("lists the unique asset names across all releases as build type options", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.getByRole("option", { name: "last-beacon-windows-x64-shipping" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "last-beacon-windows-x64-test" })).toBeInTheDocument();
+    });
+
+    it("strips the known archive extension from the build type option labels", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.queryByRole("option", { name: /\.tar\.gz/ })).not.toBeInTheDocument();
+    });
+
+    it("defaults to the active build's type when there is an active build", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag="0.2.14"
+          activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.getByLabelText("Build type")).toHaveValue("last-beacon-windows-x64-shipping.tar.gz");
+    });
+
+    it("defaults to the only build type when there's no ambiguity", () => {
+      const singleTypeReleases: Release[] = [{ ...releases[0], assets: [releases[0].assets[0]] }];
+
+      render(
+        <ReleaseList
+          releases={singleTypeReleases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.getByLabelText("Build type")).toHaveValue("last-beacon-windows-x64-shipping.tar.gz");
+    });
+
+    it("requires the user to pick a type when there's no active build and multiple types exist", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.getByLabelText("Build type")).toHaveValue("");
+      expect(screen.getByText("Select a build type to see available versions.")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { expanded: false })).not.toBeInTheDocument();
+    });
+
+    it("filters the option list down to the selected build type, across releases", () => {
+      const twoReleases: Release[] = [
+        releases[0],
+        {
+          id: 2,
+          tag_name: "0.2.13",
+          name: "LastBeacon 0.2.13",
+          prerelease: false,
+          published_at: "2026-08-01T00:00:00Z",
+          assets: [
+            { id: 8, name: "last-beacon-windows-x64-shipping.tar.gz", size: 12345, browser_download_url: "https://example.com/c" },
+          ],
+        },
+      ];
+
+      render(
+        <ReleaseList
+          releases={twoReleases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+
+      expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "LastBeacon 0.2.13" })).toBeInTheDocument();
+    });
+
+    it("switching build types updates the option list", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+      expect(
+        screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Sync last-beacon-windows-x64-test.tar.gz" }),
+      ).not.toBeInTheDocument();
+
+      selectBuildType("last-beacon-windows-x64-test.tar.gz");
+
+      expect(
+        screen.queryByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Sync last-beacon-windows-x64-test.tar.gz" }),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("shows a placeholder on the dropdown toggle when nothing is active", () => {
     render(
       <ReleaseList
@@ -37,10 +194,12 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+
     expect(screen.getByRole("button", { expanded: false })).toHaveTextContent("No active build");
   });
 
-  it("shows the active build as the dropdown's collapsed value", () => {
+  it("shows the active build's release as the dropdown's collapsed value", () => {
     render(
       <ReleaseList
         releases={releases}
@@ -53,13 +212,10 @@ describe("ReleaseList", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", { expanded: false });
-    expect(toggle).toHaveTextContent("LastBeacon 0.2.14");
-    expect(toggle).toHaveTextContent("last-beacon-windows-x64-shipping");
-    expect(toggle).not.toHaveTextContent("last-beacon-windows-x64-shipping.tar.gz");
+    expect(screen.getByRole("button", { expanded: false })).toHaveTextContent("LastBeacon 0.2.14");
   });
 
-  it("lists every asset of every release as an option once opened", () => {
+  it("lists every release of the selected build type as an option once opened", () => {
     render(
       <ReleaseList
         releases={releases}
@@ -72,31 +228,12 @@ describe("ReleaseList", () => {
       />,
     );
 
-    expect(screen.queryByText(/last-beacon-windows-x64-shipping/)).not.toBeInTheDocument();
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+    expect(screen.queryByRole("button", { name: "LastBeacon 0.2.14" })).not.toBeInTheDocument();
 
     openDropdown();
 
-    expect(screen.getByText(/last-beacon-windows-x64-shipping/)).toBeInTheDocument();
-    expect(screen.getByText(/last-beacon-windows-x64-test/)).toBeInTheDocument();
-  });
-
-  it("strips the known archive extension from the displayed option label", () => {
-    render(
-      <ReleaseList
-        releases={releases}
-        activeReleaseTag={null}
-        activeAssetName={null}
-        cachedAssetIds={new Set()}
-        onSelect={noop}
-        onCheck={noop}
-        onDelete={noop}
-      />,
-    );
-
-    openDropdown();
-
-    expect(screen.getByText("LastBeacon 0.2.14 — last-beacon-windows-x64-shipping")).toBeInTheDocument();
-    expect(screen.queryByText(/\.tar\.gz/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
   });
 
   it("only marks the active asset's own option, not every option sharing that asset name", () => {
@@ -137,13 +274,13 @@ describe("ReleaseList", () => {
 
     openDropdown();
 
-    const rows = screen.getAllByText(/last-beacon-windows-x64-shipping/).map((el) => el.closest("li"));
-    const activeRows = rows.filter((row) => row?.textContent?.includes("Active"));
-    expect(activeRows).toHaveLength(1);
-    expect(activeRows[0]).toHaveTextContent("LastBeacon 0.2.14");
+    const activeRow = screen.getByRole("button", { name: "LastBeacon 0.2.14" }).closest("li");
+    expect(activeRow).toHaveTextContent("Active");
+    const otherRow = screen.getByRole("button", { name: "LastBeacon 0.2.13" }).closest("li");
+    expect(otherRow).not.toHaveTextContent("Active");
   });
 
-  it("only shows a delete button for assets that are actually cached", () => {
+  it("only shows a delete button for the selected type's asset when it's cached", () => {
     render(
       <ReleaseList
         releases={releases}
@@ -156,11 +293,13 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
-
     expect(
       screen.getByRole("button", { name: "Delete downloaded last-beacon-windows-x64-shipping.tar.gz" }),
     ).toBeInTheDocument();
+
+    selectBuildType("last-beacon-windows-x64-test.tar.gz");
     expect(
       screen.queryByRole("button", { name: "Delete downloaded last-beacon-windows-x64-test.tar.gz" }),
     ).not.toBeInTheDocument();
@@ -179,15 +318,11 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
 
     const syncButton = screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" });
     expect(syncButton).toHaveTextContent("Check");
-
-    const notYetDownloadedButton = screen.getByRole("button", {
-      name: "Sync last-beacon-windows-x64-test.tar.gz",
-    });
-    expect(notYetDownloadedButton).toHaveTextContent("Sync");
   });
 
   it("calls onSelect (activating the build) when its option label is clicked", () => {
@@ -205,10 +340,9 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
-    fireEvent.click(
-      screen.getByRole("button", { name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "LastBeacon 0.2.14" }));
 
     expect(onSelect).toHaveBeenCalledWith(releases[0], 10);
     expect(onCheck).not.toHaveBeenCalled();
@@ -227,10 +361,9 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
-    fireEvent.click(
-      screen.getByRole("button", { name: "LastBeacon 0.2.14 — last-beacon-windows-x64-shipping" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "LastBeacon 0.2.14" }));
 
     expect(screen.getByRole("button", { expanded: true })).toHaveTextContent("No active build");
   });
@@ -250,6 +383,7 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
     fireEvent.click(screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" }));
 
@@ -271,6 +405,7 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
     fireEvent.click(
       screen.getByRole("button", { name: "Delete downloaded last-beacon-windows-x64-shipping.tar.gz" }),
@@ -292,11 +427,12 @@ describe("ReleaseList", () => {
       />,
     );
 
+    selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
     openDropdown();
-    expect(screen.getByText(/last-beacon-windows-x64-shipping/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { expanded: true }));
 
-    expect(screen.queryByText(/last-beacon-windows-x64-shipping/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "LastBeacon 0.2.14" })).not.toBeInTheDocument();
   });
 });
