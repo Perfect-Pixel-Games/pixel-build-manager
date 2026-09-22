@@ -55,8 +55,13 @@ explicitly:
   (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
 
 **`tauri.conf.json` changes:**
-- Enable `bundle.createUpdaterArtifacts` so `tauri build` produces a signed
-  `.nsis.zip` + `.sig` alongside the normal NSIS/MSI installer.
+- Enable `bundle.createUpdaterArtifacts: true` (the v2-native mode, not the
+  `"v1Compatible"` zip mode). In this mode Tauri's own NSIS installer output
+  — the same `pixel-build-manager_<version>_x64-setup.exe` already produced
+  and released today — doubles as the updater artifact; the bundler just
+  additionally writes a `.sig` file next to it when it can find the signing
+  key in the environment. No separate zip format, no change to the existing
+  installer filename.
 - Add `plugins.updater.pubkey`. No static `endpoints` array here — the
   endpoint is resolved dynamically per channel at runtime (see below), not
   fixed in config.
@@ -64,18 +69,25 @@ explicitly:
 **`.github/workflows/pixel-build-manager-build.yml` changes:**
 - `package` job: pass `TAURI_SIGNING_PRIVATE_KEY` and
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as env vars into the `npm run tauri
-  build` step, and set `PIXEL_BUILD_MANAGER_CHANNEL` based on
-  `github.ref` (`main` → `release`, `dev` → `prerelease`).
+  build` step (this is what makes the bundler emit the `.sig` alongside the
+  installer), and set `PIXEL_BUILD_MANAGER_CHANNEL` based on `github.ref`
+  (`main` → `release`, `dev` → `prerelease`). Also upload the `.sig` file
+  as part of the existing installer artifact upload.
 - `release` job: after the version tag/release are computed, add a step that
-  reads the generated `.sig` file contents and writes a `latest.json`
-  manifest (`version`, `pub_date`, `platforms["windows-x86_64"].{url,
-  signature}`), then includes it in the assets uploaded alongside the
-  installer. This replaces what `tauri-action` would auto-generate — this
-  workflow calls `tauri build` directly rather than using that action, so the
-  manifest step is written by hand.
+  reads the `.sig` file contents and writes a `latest.json` manifest
+  (`version`, `pub_date`, `platforms["windows-x86_64"].{url, signature}`,
+  with `url` pointing at the already-published NSIS `-setup.exe` asset for
+  that release), then includes it in the assets uploaded alongside the
+  installer. `tauri build` does not generate this manifest itself — it's
+  hand-written here, since this workflow calls `tauri build` directly
+  rather than using the `tauri-action` GitHub Action (which is the only
+  thing that would generate it automatically).
 
-This means every release (both channels) publishes: the installer, the
-`.nsis.zip` + `.sig` updater artifact, and a `latest.json` manifest.
+This means every release (both channels) publishes: the NSIS installer (now
+signed), its `.sig` file, and a `latest.json` manifest. The MSI installer
+(also produced by the existing `"targets": "all"` config) continues to be
+published as a manual-download alternative but is not part of the
+auto-update path — the update manifest only references the NSIS artifact.
 
 ## Runtime update flow
 
