@@ -452,6 +452,18 @@ fn launch_active_build(
     launch_executable(&exe).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_active_build_dir(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let active = active_dir(&workspace_root, &project_key);
+    Ok(active
+        .exists()
+        .then(|| active.to_string_lossy().to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -483,7 +495,8 @@ pub fn run() {
             list_cached_assets,
             delete_cached_asset,
             get_active_executable,
-            launch_active_build
+            launch_active_build,
+            get_active_build_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

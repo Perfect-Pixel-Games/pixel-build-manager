@@ -64,6 +64,10 @@ export function launchActiveBuild(projectKey: string): Promise<void> {
   return invoke("launch_active_build", { projectKey });
 }
 
+export function getActiveBuildDir(projectKey: string): Promise<string | null> {
+  return invoke("get_active_build_dir", { projectKey });
+}
+
 export function onSyncProgress(callback: (progress: SyncProgress) => void) {
   return listen<SyncProgress>("sync-progress", (event) => callback(event.payload));
 }

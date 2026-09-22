@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { isLoggedIn, logout } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { getWorkspaceRoot } from "./api/settings";
 import {
   deleteCachedAsset,
+  getActiveBuildDir,
   getActiveExecutable,
   getActiveRelease,
   launchActiveBuild,
@@ -23,8 +25,10 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
   const [activeReleaseTag, setActiveReleaseTag] = useState<string | null>(null);
   const [activeAssetName, setActiveAssetName] = useState<string | null>(null);
   const [activeExecutable, setActiveExecutable] = useState<string | null>(null);
+  const [activeBuildDir, setActiveBuildDir] = useState<string | null>(null);
   const [cachedAssetIds, setCachedAssetIds] = useState<Set<number>>(new Set());
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [openFolderError, setOpenFolderError] = useState<string | null>(null);
   const { state, sync, check } = useSync(projectKey);
 
   useEffect(() => {
@@ -40,6 +44,9 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
     getActiveExecutable(projectKey)
       .then(setActiveExecutable)
       .catch((error) => console.error("failed to look up active executable", error));
+    getActiveBuildDir(projectKey)
+      .then(setActiveBuildDir)
+      .catch((error) => console.error("failed to look up active build dir", error));
     listCachedAssets(projectKey)
       .then((ids) => setCachedAssetIds(new Set(ids)))
       .catch((error) => console.error("failed to list cached assets", error));
@@ -68,6 +75,11 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
       setActiveExecutable(await getActiveExecutable(projectKey));
     } catch (error) {
       console.error("failed to look up active executable", error);
+    }
+    try {
+      setActiveBuildDir(await getActiveBuildDir(projectKey));
+    } catch (error) {
+      console.error("failed to look up active build dir", error);
     }
   };
 
@@ -108,13 +120,27 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
     }
   };
 
+  const handleOpenFolder = async () => {
+    setOpenFolderError(null);
+    if (!activeBuildDir) {
+      return;
+    }
+    try {
+      await openPath(activeBuildDir);
+    } catch (error) {
+      setOpenFolderError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <div>
       <SyncStatus state={state} />
-      {activeExecutable && (
+      {(activeExecutable || activeBuildDir) && (
         <div>
-          <button onClick={handlePlay}>Play</button>
+          {activeExecutable && <button onClick={handlePlay}>Play</button>}
+          {activeBuildDir && <button onClick={handleOpenFolder}>Open Folder</button>}
           {launchError && <p>Failed to launch: {launchError}</p>}
+          {openFolderError && <p>Failed to open folder: {openFolderError}</p>}
         </div>
       )}
       <ReleaseList
