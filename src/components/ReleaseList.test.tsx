@@ -36,6 +36,7 @@ describe("ReleaseList", () => {
           activeReleaseTag={null}
           activeAssetName={null}
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -53,6 +54,7 @@ describe("ReleaseList", () => {
           activeReleaseTag={null}
           activeAssetName={null}
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -69,6 +71,7 @@ describe("ReleaseList", () => {
           activeReleaseTag="0.2.14"
           activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -87,6 +90,7 @@ describe("ReleaseList", () => {
           activeReleaseTag={null}
           activeAssetName={null}
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -103,6 +107,7 @@ describe("ReleaseList", () => {
           activeReleaseTag={null}
           activeAssetName={null}
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -135,6 +140,7 @@ describe("ReleaseList", () => {
           activeReleaseTag={null}
           activeAssetName={null}
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -155,6 +161,7 @@ describe("ReleaseList", () => {
           activeReleaseTag={null}
           activeAssetName={null}
           cachedAssetIds={new Set()}
+          disabled={false}
           onSelect={noop}
           onCheck={noop}
           onDelete={noop}
@@ -181,6 +188,243 @@ describe("ReleaseList", () => {
     });
   });
 
+  describe("switching build type with an active build", () => {
+    it("activates the same release under the new build type", () => {
+      const onSelect = vi.fn();
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag="0.2.14"
+          activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={onSelect}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-test.tar.gz");
+
+      expect(onSelect).toHaveBeenCalledWith(releases[0], 11);
+    });
+
+    it("does not call onSelect when there is no active build", () => {
+      const onSelect = vi.fn();
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={onSelect}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("does not call onSelect when the chosen type is already the active one", () => {
+      const onSelect = vi.fn();
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag="0.2.14"
+          activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={onSelect}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      // The effect already auto-selected "shipping" (the active type);
+      // re-selecting it explicitly should still be a no-op.
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("does not call onSelect when the active release has no asset of the new type", () => {
+      const releasesWithMismatch: Release[] = [
+        releases[0],
+        {
+          id: 2,
+          tag_name: "0.2.13",
+          name: "LastBeacon 0.2.13",
+          prerelease: false,
+          published_at: "2026-08-01T00:00:00Z",
+          assets: [
+            { id: 20, name: "last-beacon-windows-x64-test.tar.gz", size: 1, browser_download_url: "https://example.com/d" },
+          ],
+        },
+      ];
+      const onSelect = vi.fn();
+      render(
+        <ReleaseList
+          releases={releasesWithMismatch}
+          activeReleaseTag="0.2.13"
+          activeAssetName="last-beacon-windows-x64-test.tar.gz"
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={onSelect}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("release/prerelease filter", () => {
+    const mixedReleases: Release[] = [
+      {
+        id: 1,
+        tag_name: "0.3.0-rc1",
+        name: "LastBeacon 0.3.0-rc1",
+        prerelease: true,
+        published_at: "2026-09-10T00:00:00Z",
+        assets: [
+          { id: 30, name: "last-beacon-windows-x64-shipping.tar.gz", size: 1, browser_download_url: "https://example.com/rc" },
+        ],
+      },
+      {
+        id: 2,
+        tag_name: "0.2.14",
+        name: "LastBeacon 0.2.14",
+        prerelease: false,
+        published_at: "2026-09-01T00:00:00Z",
+        assets: [
+          { id: 10, name: "last-beacon-windows-x64-shipping.tar.gz", size: 1, browser_download_url: "https://example.com/a" },
+        ],
+      },
+    ];
+
+    it("shows both releases and prereleases by default", () => {
+      render(
+        <ReleaseList
+          releases={mixedReleases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+
+      expect(screen.getByRole("button", { name: "LastBeacon 0.3.0-rc1 (prerelease)" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
+    });
+
+    it("hides prereleases when the Prereleases checkbox is unchecked", () => {
+      render(
+        <ReleaseList
+          releases={mixedReleases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+      fireEvent.click(screen.getByLabelText("Prereleases"));
+
+      expect(screen.queryByRole("button", { name: "LastBeacon 0.3.0-rc1 (prerelease)" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
+    });
+
+    it("hides releases when the Releases checkbox is unchecked", () => {
+      render(
+        <ReleaseList
+          releases={mixedReleases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+      fireEvent.click(screen.getByLabelText("Releases"));
+
+      expect(screen.getByRole("button", { name: "LastBeacon 0.3.0-rc1 (prerelease)" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "LastBeacon 0.2.14" })).not.toBeInTheDocument();
+    });
+
+    it("does not affect which build is shown as active on the collapsed toggle", () => {
+      render(
+        <ReleaseList
+          releases={mixedReleases}
+          activeReleaseTag="0.3.0-rc1"
+          activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      // Hide the prerelease from the list -- the active build is a
+      // prerelease, so it disappears from the rows, but the toggle must
+      // still accurately report it as active.
+      fireEvent.click(screen.getByLabelText("Prereleases"));
+
+      expect(screen.getByRole("button", { expanded: false })).toHaveTextContent("LastBeacon 0.3.0-rc1");
+    });
+
+    it("filtering never calls onSelect, onCheck, or onDelete", () => {
+      const onSelect = vi.fn();
+      const onCheck = vi.fn();
+      const onDelete = vi.fn();
+      render(
+        <ReleaseList
+          releases={mixedReleases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set([30, 10])}
+          disabled={false}
+          onSelect={onSelect}
+          onCheck={onCheck}
+          onDelete={onDelete}
+        />,
+      );
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+      fireEvent.click(screen.getByLabelText("Prereleases"));
+      fireEvent.click(screen.getByLabelText("Releases"));
+      fireEvent.click(screen.getByLabelText("Releases"));
+
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onCheck).not.toHaveBeenCalled();
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+  });
+
   it("shows a placeholder on the dropdown toggle when nothing is active", () => {
     render(
       <ReleaseList
@@ -188,6 +432,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -206,6 +451,7 @@ describe("ReleaseList", () => {
         activeReleaseTag="0.2.14"
         activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
         cachedAssetIds={new Set()}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -222,6 +468,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -266,6 +513,7 @@ describe("ReleaseList", () => {
         activeReleaseTag="0.2.14"
         activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
         cachedAssetIds={new Set()}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -287,6 +535,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -312,6 +561,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -334,6 +584,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
+          disabled={false}
         onSelect={onSelect}
         onCheck={onCheck}
         onDelete={noop}
@@ -355,6 +606,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -377,6 +629,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
+          disabled={false}
         onSelect={onSelect}
         onCheck={onCheck}
         onDelete={noop}
@@ -399,6 +652,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set([10])}
+          disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={onDelete}
@@ -421,6 +675,7 @@ describe("ReleaseList", () => {
         activeReleaseTag={null}
         activeAssetName={null}
         cachedAssetIds={new Set()}
+        disabled={false}
         onSelect={noop}
         onCheck={noop}
         onDelete={noop}
@@ -434,5 +689,75 @@ describe("ReleaseList", () => {
     fireEvent.click(screen.getByRole("button", { expanded: true }));
 
     expect(screen.queryByRole("button", { name: "LastBeacon 0.2.14" })).not.toBeInTheDocument();
+  });
+
+  describe("disabled", () => {
+    it("disables the build type select, filter checkboxes, toggle, and every row control", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag="0.2.14"
+          activeAssetName="last-beacon-windows-x64-shipping.tar.gz"
+          cachedAssetIds={new Set([10])}
+          disabled
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.getByLabelText("Build type")).toBeDisabled();
+      expect(screen.getByRole("button", { expanded: false })).toBeDisabled();
+      expect(screen.getByLabelText("Releases")).toBeDisabled();
+      expect(screen.getByLabelText("Prereleases")).toBeDisabled();
+    });
+
+    it("disables row-level controls once the list is open", () => {
+      const props = {
+        releases,
+        activeReleaseTag: null,
+        activeAssetName: null,
+        cachedAssetIds: new Set([10]),
+        onSelect: noop,
+        onCheck: noop,
+        onDelete: noop,
+      };
+
+      const { rerender } = render(<ReleaseList {...props} disabled={false} />);
+
+      selectBuildType("last-beacon-windows-x64-shipping.tar.gz");
+      openDropdown();
+      expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).not.toBeDisabled();
+
+      // A download can start (disabling everything) while the list is
+      // already open -- re-render with disabled to simulate that, rather
+      // than clicking a now-disabled toggle to open it fresh.
+      rerender(<ReleaseList {...props} disabled />);
+
+      expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Sync last-beacon-windows-x64-shipping.tar.gz" }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Delete downloaded last-beacon-windows-x64-shipping.tar.gz" }),
+      ).toBeDisabled();
+    });
+
+    it("does not disable anything by default when nothing is in flight", () => {
+      render(
+        <ReleaseList
+          releases={releases}
+          activeReleaseTag={null}
+          activeAssetName={null}
+          cachedAssetIds={new Set()}
+          disabled={false}
+          onSelect={noop}
+          onCheck={noop}
+          onDelete={noop}
+        />,
+      );
+
+      expect(screen.getByLabelText("Build type")).not.toBeDisabled();
+    });
   });
 });

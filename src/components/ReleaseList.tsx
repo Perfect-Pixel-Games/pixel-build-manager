@@ -11,6 +11,8 @@ type Props = {
   /** Sync/Check only downloads/verifies the cached copy -- it never changes the active build. */
   onCheck: (release: Release, assetId: number) => void;
   onDelete: (release: Release, assetId: number) => void;
+  /** True while a download/check is in flight -- every control here is disabled, since none of them are safe to act on mid-operation. */
+  disabled: boolean;
 };
 
 type Option = {
@@ -41,9 +43,12 @@ export function ReleaseList({
   onSelect,
   onCheck,
   onDelete,
+  disabled,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [buildType, setBuildType] = useState<string | null>(null);
+  const [showReleases, setShowReleases] = useState(true);
+  const [showPrereleases, setShowPrereleases] = useState(true);
 
   // A project's asset file name is stable across every release of that
   // variant (only the release/tag differs between versions of "the same
@@ -75,7 +80,10 @@ export function ReleaseList({
     }
   }, [buildTypes, activeAssetName, buildType]);
 
-  const options: Option[] = releases.flatMap((release) =>
+  // Every option for the selected build type, across all releases --
+  // independent of the release/prerelease display filter below, since that
+  // filter must never affect what counts as "active".
+  const optionsForBuildType: Option[] = releases.flatMap((release) =>
     release.assets
       .filter((asset) => asset.name === buildType)
       .map((asset) => ({
@@ -85,14 +93,39 @@ export function ReleaseList({
       })),
   );
 
-  const activeOption = options.find((option) => option.isActive);
+  const activeOption = optionsForBuildType.find((option) => option.isActive);
+
+  // Display-only: narrows which of the above options are rendered in the
+  // list, but never influences activation.
+  const visibleOptions = optionsForBuildType.filter(({ release }) =>
+    release.prerelease ? showPrereleases : showReleases,
+  );
+
+  // Switching build type re-activates the currently active release under
+  // the new type (same CL, different variant) when that variant exists --
+  // since selecting any build type already downloads every type for that
+  // release, this is just an extract-and-switch, not a fresh download.
+  const handleBuildTypeChange = (value: string) => {
+    const newBuildType = value || null;
+    setBuildType(newBuildType);
+
+    if (!newBuildType || !activeReleaseTag || newBuildType === activeAssetName) {
+      return;
+    }
+    const activeRelease = releases.find((release) => release.tag_name === activeReleaseTag);
+    const matchingAsset = activeRelease?.assets.find((asset) => asset.name === newBuildType);
+    if (activeRelease && matchingAsset) {
+      onSelect(activeRelease, matchingAsset.id);
+    }
+  };
 
   return (
     <div>
       <select
         aria-label="Build type"
         value={buildType ?? ""}
-        onChange={(event) => setBuildType(event.target.value || null)}
+        disabled={disabled}
+        onChange={(event) => handleBuildTypeChange(event.target.value)}
       >
         <option value="" disabled>
           Select a build type
@@ -107,20 +140,46 @@ export function ReleaseList({
         buildTypes.length > 0 && <p>Select a build type to see available versions.</p>
       ) : (
         <div>
-          <button aria-expanded={open} onClick={() => setOpen((prev) => !prev)}>
+          <fieldset>
+            <legend>Show</legend>
+            <label>
+              <input
+                type="checkbox"
+                checked={showReleases}
+                disabled={disabled}
+                onChange={(event) => setShowReleases(event.target.checked)}
+              />
+              Releases
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showPrereleases}
+                disabled={disabled}
+                onChange={(event) => setShowPrereleases(event.target.checked)}
+              />
+              Prereleases
+            </label>
+          </fieldset>
+          <button aria-expanded={open} disabled={disabled} onClick={() => setOpen((prev) => !prev)}>
             {activeOption ? releaseLabel(activeOption.release) : "No active build"} {open ? "▴" : "▾"}
           </button>
           {open && (
             <ul>
-              {options.map(({ release, asset, isActive }) => (
+              {visibleOptions.map(({ release, asset, isActive }) => (
                 <li key={`${release.id}-${asset.id}`}>
-                  <button aria-label={releaseLabel(release)} onClick={() => onSelect(release, asset.id)}>
+                  <button
+                    aria-label={releaseLabel(release)}
+                    disabled={disabled}
+                    onClick={() => onSelect(release, asset.id)}
+                  >
                     {releaseLabel(release)}
                     {isActive && <strong> (Active)</strong>}
                   </button>
                   <button
                     aria-label={`Sync ${asset.name}`}
                     title={cachedAssetIds.has(asset.id) ? "Already downloaded -- check for a fresh copy" : "Sync"}
+                    disabled={disabled}
                     onClick={() => onCheck(release, asset.id)}
                   >
                     {cachedAssetIds.has(asset.id) ? "Check" : "Sync"}
@@ -128,6 +187,7 @@ export function ReleaseList({
                   {cachedAssetIds.has(asset.id) && (
                     <button
                       aria-label={`Delete downloaded ${asset.name}`}
+                      disabled={disabled}
                       onClick={() => onDelete(release, asset.id)}
                     >
                       Delete

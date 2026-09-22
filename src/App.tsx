@@ -20,7 +20,7 @@ import { WorkspaceSetup } from "./components/WorkspaceSetup";
 import { useSync } from "./hooks/useSync";
 import "./App.css";
 
-function ProjectDetail({ projectKey }: { projectKey: string }) {
+export function ProjectDetail({ projectKey }: { projectKey: string }) {
   const [releases, setReleases] = useState<Release[]>([]);
   const [activeReleaseTag, setActiveReleaseTag] = useState<string | null>(null);
   const [activeAssetName, setActiveAssetName] = useState<string | null>(null);
@@ -52,12 +52,29 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
       .catch((error) => console.error("failed to list cached assets", error));
   }, [projectKey]);
 
-  // Picking an option activates it: download/verify, then extract as the
-  // active build. Only mark it active if the sync actually completed --
-  // `sync()` resolves false (without throwing) if it was skipped because
-  // another operation was already in flight.
+  // Picking an option activates it: download/verify every build type of
+  // that release (so switching build type later, for the same CL, is
+  // already cached), then extract the selected one as the active build.
+  // Only mark it active if the sync actually completed -- `sync()`
+  // resolves false (without throwing) if it was skipped because another
+  // operation was already in flight.
   const handleSelect = async (release: Release, assetId: number) => {
     const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
+
+    for (const other of release.assets) {
+      if (other.id === assetId) {
+        continue;
+      }
+      try {
+        const cached = await check(other);
+        if (cached) {
+          setCachedAssetIds((prev) => new Set(prev).add(other.id));
+        }
+      } catch (error) {
+        console.error(`failed to download build type ${other.name}`, error);
+      }
+    }
+
     let succeeded = false;
     try {
       succeeded = await sync(release, asset);
@@ -132,13 +149,26 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
     }
   };
 
+  // Nothing here is safe to act on mid-download/check: a build type switch
+  // or delete could race the in-flight extraction, and the active build/
+  // its folder may be mid-write.
+  const isBusy = state.phase === "syncing";
+
   return (
     <div>
       <SyncStatus state={state} />
       {(activeExecutable || activeBuildDir) && (
         <div>
-          {activeExecutable && <button onClick={handlePlay}>Play</button>}
-          {activeBuildDir && <button onClick={handleOpenFolder}>Open Folder</button>}
+          {activeExecutable && (
+            <button onClick={handlePlay} disabled={isBusy}>
+              Play
+            </button>
+          )}
+          {activeBuildDir && (
+            <button onClick={handleOpenFolder} disabled={isBusy}>
+              Open Folder
+            </button>
+          )}
           {launchError && <p>Failed to launch: {launchError}</p>}
           {openFolderError && <p>Failed to open folder: {openFolderError}</p>}
         </div>
@@ -148,11 +178,16 @@ function ProjectDetail({ projectKey }: { projectKey: string }) {
         activeReleaseTag={activeReleaseTag}
         activeAssetName={activeAssetName}
         cachedAssetIds={cachedAssetIds}
+        disabled={isBusy}
         onSelect={handleSelect}
         onCheck={handleCheck}
         onDelete={handleDelete}
       />
-      <ClearCacheButton projectKey={projectKey} onCleared={() => setCachedAssetIds(new Set())} />
+      <ClearCacheButton
+        projectKey={projectKey}
+        onCleared={() => setCachedAssetIds(new Set())}
+        disabled={isBusy}
+      />
     </div>
   );
 }

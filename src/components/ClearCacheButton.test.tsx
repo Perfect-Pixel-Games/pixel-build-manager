@@ -45,6 +45,12 @@ describe("ClearCacheButton", () => {
     expect(await screen.findByText(/failed to clear cache: disk error/i)).toBeInTheDocument();
   });
 
+  it("is disabled when the disabled prop is true, even though nothing is pending", () => {
+    render(<ClearCacheButton projectKey="owner/repo" disabled />);
+
+    expect(screen.getByRole("button", { name: /clear cache/i })).toBeDisabled();
+  });
+
   it("clears the previous error on the next click attempt", async () => {
     vi.mocked(syncApi.clearProjectCache)
       .mockRejectedValueOnce(new Error("disk error"))
