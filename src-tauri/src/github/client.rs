@@ -58,6 +58,22 @@ impl GithubClient {
         }
     }
 
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// The authenticated asset-content API URL for downloading a release
+    /// asset's bytes. Deliberately not `asset.browser_download_url` -- that
+    /// URL only works for an interactive browser session (or a fully public
+    /// repo); for a private repo it 404s without one, since GitHub masks
+    /// private-resource existence rather than returning 401/403.
+    pub fn asset_download_url(&self, owner: &str, repo: &str, asset_id: u64) -> String {
+        format!(
+            "{}/repos/{}/{}/releases/assets/{}",
+            self.base_url, owner, repo, asset_id
+        )
+    }
+
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         self.http
             .request(method, format!("{}{}", self.base_url, path))
@@ -345,5 +361,27 @@ mod tests {
         let repos = client.list_accessible_repos_with_releases().await.unwrap();
 
         assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn asset_download_url_points_at_the_authenticated_asset_content_api() {
+        let client = GithubClient::with_base_url(
+            "token123".to_string(),
+            "https://api.github.com".to_string(),
+        );
+
+        let url = client.asset_download_url("pixel-perfect", "last-beacon", 42);
+
+        assert_eq!(
+            url,
+            "https://api.github.com/repos/pixel-perfect/last-beacon/releases/assets/42"
+        );
+    }
+
+    #[test]
+    fn token_exposes_the_client_s_bearer_token() {
+        let client = GithubClient::with_base_url("token123".to_string(), "irrelevant".to_string());
+
+        assert_eq!(client.token(), "token123");
     }
 }

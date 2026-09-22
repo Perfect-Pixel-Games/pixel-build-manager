@@ -24,7 +24,6 @@ export function syncReleaseAsset(
     assetId: asset.id,
     assetName: asset.name,
     assetSize: asset.size,
-    downloadUrl: asset.browser_download_url,
   });
 }
 
@@ -34,7 +33,6 @@ export function checkReleaseAsset(projectKey: string, asset: ReleaseAsset): Prom
     assetId: asset.id,
     assetName: asset.name,
     assetSize: asset.size,
-    downloadUrl: asset.browser_download_url,
   });
 }
 
@@ -64,6 +62,10 @@ export function getActiveExecutable(projectKey: string): Promise<string | null> 
 
 export function launchActiveBuild(projectKey: string): Promise<void> {
   return invoke("launch_active_build", { projectKey });
+}
+
+export function getActiveBuildDir(projectKey: string): Promise<string | null> {
+  return invoke("get_active_build_dir", { projectKey });
 }
 
 export function onSyncProgress(callback: (progress: SyncProgress) => void) {

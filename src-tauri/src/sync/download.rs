@@ -14,9 +14,14 @@ pub enum DownloadError {
     SizeMismatch { expected: u64, actual: u64 },
 }
 
+// `Accept: application/octet-stream` + a bearer token are required to fetch
+// a private repo's release asset bytes from GitHub's asset-content API --
+// without them the request 404s (GitHub masks private-resource existence
+// rather than returning 401/403) instead of streaming the asset.
 pub async fn download_with_progress<F: FnMut(u64, u64)>(
     http: &reqwest::Client,
     url: &str,
+    auth_token: &str,
     destination: &Path,
     expected_size: u64,
     mut on_progress: F,
@@ -24,6 +29,8 @@ pub async fn download_with_progress<F: FnMut(u64, u64)>(
     let response = http
         .get(url)
         .header("User-Agent", "pixel-build-manager")
+        .header("Accept", "application/octet-stream")
+        .bearer_auth(auth_token)
         .send()
         .await?;
 
@@ -80,7 +87,7 @@ async fn write_response_to_file<F: FnMut(u64, u64)>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -101,6 +108,7 @@ mod tests {
         download_with_progress(
             &http,
             &format!("{}/asset.zip", server.uri()),
+            "test-token",
             &destination,
             1000,
             |downloaded, total| last_progress = (downloaded, total),
@@ -128,6 +136,7 @@ mod tests {
         let result = download_with_progress(
             &http,
             &format!("{}/asset.zip", server.uri()),
+            "test-token",
             &destination,
             999,
             |_, _| {},
@@ -142,6 +151,39 @@ mod tests {
             })
         ));
         assert!(!destination.exists());
+    }
+
+    #[tokio::test]
+    async fn sends_a_bearer_token_and_octet_stream_accept_header() {
+        // GitHub's asset-content API requires both of these to serve a
+        // private repo's asset bytes -- without them it 404s instead of
+        // erroring with 401/403 (masking whether the resource exists at
+        // all), which is exactly the symptom this test guards against.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/asset.zip"))
+            .and(header("Authorization", "Bearer test-token"))
+            .and(header("Accept", "application/octet-stream"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1u8; 10]))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset.zip");
+        let http = reqwest::Client::new();
+
+        download_with_progress(
+            &http,
+            &format!("{}/asset.zip", server.uri()),
+            "test-token",
+            &destination,
+            10,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), vec![1u8; 10]);
     }
 
     #[tokio::test]
@@ -160,6 +202,7 @@ mod tests {
         let result = download_with_progress(
             &http,
             &format!("{}/asset.zip", server.uri()),
+            "test-token",
             &destination,
             1000,
             |_, _| {},
