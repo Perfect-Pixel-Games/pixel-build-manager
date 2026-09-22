@@ -24,7 +24,6 @@ export function syncReleaseAsset(
     assetId: asset.id,
     assetName: asset.name,
     assetSize: asset.size,
-    downloadUrl: asset.browser_download_url,
   });
 }
 
@@ -34,7 +33,6 @@ export function checkReleaseAsset(projectKey: string, asset: ReleaseAsset): Prom
     assetId: asset.id,
     assetName: asset.name,
     assetSize: asset.size,
-    downloadUrl: asset.browser_download_url,
   });
 }
 

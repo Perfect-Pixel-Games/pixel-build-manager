@@ -20,6 +20,7 @@ pub struct SyncRequest<'a> {
     pub asset_name: &'a str,
     pub asset_size: u64,
     pub download_url: &'a str,
+    pub auth_token: &'a str,
 }
 
 /// Ensures a valid copy of the requested asset is present in the project's
@@ -48,6 +49,7 @@ async fn ensure_cached_copy<F: FnMut(u64, u64)>(
         download_with_progress(
             http,
             request.download_url,
+            request.auth_token,
             &cached_path,
             request.asset_size,
             on_progress,
@@ -130,6 +132,7 @@ mod tests {
             asset_name: "asset.zip",
             asset_size: zip_len,
             download_url: &download_url,
+            auth_token: "test-token",
         };
 
         sync_asset(&http, request(), |_, _| {}).await.unwrap();
@@ -176,6 +179,7 @@ mod tests {
             asset_name: "asset.zip",
             asset_size: zip_len,
             download_url: &download_url,
+            auth_token: "test-token",
         };
 
         // Simulate a cached copy left over from an interrupted/corrupted
@@ -224,6 +228,7 @@ mod tests {
             asset_name: "asset.zip",
             asset_size: zip_len,
             download_url: &download_url,
+            auth_token: "test-token",
         };
 
         ensure_asset_cached(&http, request(), |_, _| {})
@@ -287,6 +292,7 @@ mod tests {
             asset_name: "asset.tar.gz",
             asset_size: tar_gz_bytes.len() as u64,
             download_url: &download_url,
+            auth_token: "test-token",
         };
 
         sync_asset(&http, request, |_, _| {}).await.unwrap();

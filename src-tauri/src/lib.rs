@@ -200,7 +200,6 @@ async fn sync_release_asset(
     asset_id: u64,
     asset_name: String,
     asset_size: u64,
-    download_url: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     begin_operation(&state, &project_key)?;
@@ -211,7 +210,6 @@ async fn sync_release_asset(
         asset_id,
         &asset_name,
         asset_size,
-        &download_url,
         &state,
     )
     .await;
@@ -227,7 +225,6 @@ async fn sync_release_asset_inner(
     asset_id: u64,
     asset_name: &str,
     asset_size: u64,
-    download_url: &str,
     state: &AppState,
 ) -> Result<(), String> {
     let settings = Settings::load_from(&state.settings_path);
@@ -236,6 +233,13 @@ async fn sync_release_asset_inner(
         .clone()
         .ok_or_else(|| "workspace root not set".to_string())?;
 
+    let client = build_github_client(state)?;
+    let (owner, repo) = project_key
+        .split_once('/')
+        .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
+    let download_url = client.asset_download_url(owner, repo, asset_id);
+    let auth_token = client.token();
+
     let http = reqwest::Client::new();
     let request = SyncRequest {
         workspace_root: &workspace_root,
@@ -243,7 +247,8 @@ async fn sync_release_asset_inner(
         asset_id,
         asset_name,
         asset_size,
-        download_url,
+        download_url: &download_url,
+        auth_token,
     };
 
     let project_key_for_events = project_key.to_string();
@@ -282,20 +287,12 @@ async fn check_release_asset(
     asset_id: u64,
     asset_name: String,
     asset_size: u64,
-    download_url: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     begin_operation(&state, &project_key)?;
-    let result = check_release_asset_inner(
-        app,
-        &project_key,
-        asset_id,
-        &asset_name,
-        asset_size,
-        &download_url,
-        &state,
-    )
-    .await;
+    let result =
+        check_release_asset_inner(app, &project_key, asset_id, &asset_name, asset_size, &state)
+            .await;
     end_operation(&state, &project_key);
     result
 }
@@ -306,10 +303,16 @@ async fn check_release_asset_inner(
     asset_id: u64,
     asset_name: &str,
     asset_size: u64,
-    download_url: &str,
     state: &AppState,
 ) -> Result<(), String> {
     let workspace_root = workspace_root_from_settings(state)?;
+
+    let client = build_github_client(state)?;
+    let (owner, repo) = project_key
+        .split_once('/')
+        .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
+    let download_url = client.asset_download_url(owner, repo, asset_id);
+    let auth_token = client.token();
 
     let http = reqwest::Client::new();
     let request = SyncRequest {
@@ -318,7 +321,8 @@ async fn check_release_asset_inner(
         asset_id,
         asset_name,
         asset_size,
-        download_url,
+        download_url: &download_url,
+        auth_token,
     };
 
     let project_key_for_events = project_key.to_string();
