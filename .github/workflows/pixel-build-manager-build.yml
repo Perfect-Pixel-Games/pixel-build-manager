@@ -186,7 +186,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pixel-build-manager-${{ matrix.platform }}
-          path: src-tauri/target/release/bundle/**/*
+          # Build output lands under CARGO_TARGET_DIR (set above), not the
+          # default src-tauri/target -- this must track that env var.
+          path: ${{ env.CARGO_TARGET_DIR }}\release\bundle\**\*
           if-no-files-found: error
 
   release:
