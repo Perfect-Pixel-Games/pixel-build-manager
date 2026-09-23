@@ -278,6 +278,8 @@ git commit -m "Rework Settings for tab binding, per-config ticks, and theme"
 
 ---
 
+**Execution note (discovered while running this plan):** Rust type-checks the whole crate before running any test, so `cargo test <module>::` cannot pass in isolation while `lib.rs` (not rewritten until Task 3) still calls the old API. Tasks 1 and 2 each need a small compile-only patch to `lib.rs`'s affected call sites/imports (using the new signatures, not a full rewrite) so the crate builds; Task 3 then replaces `lib.rs` wholesale anyway, superseding those interim patches. This does not change either task's own file list/scope, just adds an unavoidable "make it compile" side-effect on `lib.rs` along the way.
+
 ### Task 2: Backend — retarget extraction to per-release-per-config directories
 
 **Files:**
