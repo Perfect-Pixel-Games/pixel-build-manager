@@ -7,4 +7,7 @@ import { cleanup } from "@testing-library/react";
 // it explicitly so component trees are unmounted between tests.
 afterEach(() => {
   cleanup();
+  // useTheme sets this directly on <html>, outside the React tree cleanup()
+  // unmounts -- reset it so one test's theme choice can't leak into the next.
+  document.documentElement.removeAttribute("data-theme");
 });
