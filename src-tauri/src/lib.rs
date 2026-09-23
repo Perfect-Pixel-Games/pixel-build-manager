@@ -240,7 +240,7 @@ async fn sync_release_asset(
 async fn sync_release_asset_inner(
     app: tauri::AppHandle,
     project_key: &str,
-    release_tag: &str,
+    _release_tag: &str,
     asset_id: u64,
     asset_name: &str,
     asset_size: u64,
