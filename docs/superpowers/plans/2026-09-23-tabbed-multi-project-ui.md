@@ -3548,4 +3548,564 @@ git commit -m "Add BuildBrowser component (replaces ReleaseList)"
 ```
 
 ---
+
+### Task 12: Frontend — `SyncedBuildControls` component
+
+**Files:**
+- Create: `src/components/SyncedBuildControls.tsx`
+- Create: `src/components/SyncedBuildControls.test.tsx`
+
+Renders the "Open Folder" + launch button pair for one already-synced (release, config), replacing the old single project-level Play/Open Folder pair in `ProjectDetail`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/components/SyncedBuildControls.test.tsx`:
+
+```tsx
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { SyncedBuildControls } from "./SyncedBuildControls";
+import * as syncApi from "../api/sync";
+import * as opener from "@tauri-apps/plugin-opener";
+
+vi.mock("../api/sync");
+vi.mock("@tauri-apps/plugin-opener");
+
+describe("SyncedBuildControls", () => {
+  beforeEach(() => {
+    vi.mocked(opener.openPath).mockResolvedValue(undefined);
+  });
+
+  it("renders both buttons once the build dir and executable resolve", async () => {
+    vi.mocked(syncApi.getBuildDir).mockResolvedValue("D:\\Builds\\org\\repo\\builds\\0.2.14\\shipping.zip");
+    vi.mocked(syncApi.getBuildExecutable).mockResolvedValue(
+      "D:\\Builds\\org\\repo\\builds\\0.2.14\\shipping.zip\\game.exe",
+    );
+
+    render(
+      <SyncedBuildControls
+        projectKey="org/repo"
+        releaseTag="0.2.14"
+        configName="shipping.zip"
+        disabled={false}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Launch shipping.zip" })).toBeInTheDocument();
+  });
+
+  it("renders neither button when no executable or dir is found yet", async () => {
+    vi.mocked(syncApi.getBuildDir).mockResolvedValue(null);
+    vi.mocked(syncApi.getBuildExecutable).mockResolvedValue(null);
+
+    render(
+      <SyncedBuildControls
+        projectKey="org/repo"
+        releaseTag="0.2.14"
+        configName="shipping.zip"
+        disabled={false}
+      />,
+    );
+
+    await waitFor(() => expect(syncApi.getBuildDir).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /open folder/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /launch/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the build dir when Open Folder is clicked", async () => {
+    vi.mocked(syncApi.getBuildDir).mockResolvedValue("D:\\Builds\\shipping.zip");
+    vi.mocked(syncApi.getBuildExecutable).mockResolvedValue(null);
+
+    render(
+      <SyncedBuildControls
+        projectKey="org/repo"
+        releaseTag="0.2.14"
+        configName="shipping.zip"
+        disabled={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder for shipping.zip" }));
+
+    await waitFor(() => expect(opener.openPath).toHaveBeenCalledWith("D:\\Builds\\shipping.zip"));
+  });
+
+  it("launches the build when Launch is clicked", async () => {
+    vi.mocked(syncApi.getBuildDir).mockResolvedValue(null);
+    vi.mocked(syncApi.getBuildExecutable).mockResolvedValue("D:\\Builds\\shipping.zip\\game.exe");
+    vi.mocked(syncApi.launchBuild).mockResolvedValue(undefined);
+
+    render(
+      <SyncedBuildControls
+        projectKey="org/repo"
+        releaseTag="0.2.14"
+        configName="shipping.zip"
+        disabled={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Launch shipping.zip" }));
+
+    await waitFor(() =>
+      expect(syncApi.launchBuild).toHaveBeenCalledWith("org/repo", "0.2.14", "shipping.zip"),
+    );
+  });
+
+  it("shows an error message when launching fails", async () => {
+    vi.mocked(syncApi.getBuildDir).mockResolvedValue(null);
+    vi.mocked(syncApi.getBuildExecutable).mockResolvedValue("D:\\Builds\\shipping.zip\\game.exe");
+    vi.mocked(syncApi.launchBuild).mockRejectedValue(new Error("exe not found"));
+
+    render(
+      <SyncedBuildControls
+        projectKey="org/repo"
+        releaseTag="0.2.14"
+        configName="shipping.zip"
+        disabled={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Launch shipping.zip" }));
+
+    expect(await screen.findByText("exe not found")).toBeInTheDocument();
+  });
+
+  it("disables both buttons when disabled is true", async () => {
+    vi.mocked(syncApi.getBuildDir).mockResolvedValue("D:\\Builds\\shipping.zip");
+    vi.mocked(syncApi.getBuildExecutable).mockResolvedValue("D:\\Builds\\shipping.zip\\game.exe");
+
+    render(
+      <SyncedBuildControls
+        projectKey="org/repo"
+        releaseTag="0.2.14"
+        configName="shipping.zip"
+        disabled
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Launch shipping.zip" })).toBeDisabled();
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npm run test -- SyncedBuildControls.test.tsx`
+Expected: FAIL — `src/components/SyncedBuildControls.tsx` does not exist yet.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Create `src/components/SyncedBuildControls.tsx`:
+
+```tsx
+import { useEffect, useState } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { getBuildDir, getBuildExecutable, launchBuild } from "../api/sync";
+
+type Props = {
+  projectKey: string;
+  releaseTag: string;
+  configName: string;
+  disabled: boolean;
+};
+
+export function SyncedBuildControls({ projectKey, releaseTag, configName, disabled }: Props) {
+  const [buildDir, setBuildDir] = useState<string | null>(null);
+  const [executable, setExecutable] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getBuildDir(projectKey, releaseTag, configName)
+      .then(setBuildDir)
+      .catch((err) => console.error("failed to look up build dir", err));
+    getBuildExecutable(projectKey, releaseTag, configName)
+      .then(setExecutable)
+      .catch((err) => console.error("failed to look up build executable", err));
+  }, [projectKey, releaseTag, configName]);
+
+  const handleOpenFolder = async () => {
+    setError(null);
+    if (!buildDir) {
+      return;
+    }
+    try {
+      await openPath(buildDir);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleLaunch = async () => {
+    setError(null);
+    try {
+      await launchBuild(projectKey, releaseTag, configName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <span>
+      {buildDir && (
+        <button aria-label={`Open folder for ${configName}`} disabled={disabled} onClick={handleOpenFolder}>
+          Open Folder
+        </button>
+      )}
+      {executable && (
+        <button aria-label={`Launch ${configName}`} disabled={disabled} onClick={handleLaunch}>
+          Launch
+        </button>
+      )}
+      {error && <p>{error}</p>}
+    </span>
+  );
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npm run test -- SyncedBuildControls.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/SyncedBuildControls.tsx src/components/SyncedBuildControls.test.tsx
+git commit -m "Add SyncedBuildControls component for per-config open/launch"
+```
+
+---
+
+### Task 13: Frontend — `Login.tsx` auto-open verification link + copy button
+
+**Files:**
+- Modify: `src/components/Login.tsx` (whole file)
+- Modify: `src/components/Login.test.tsx` (whole file)
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace all of `src/components/Login.test.tsx` with:
+
+```tsx
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { Login } from "./Login";
+import * as authApi from "../api/auth";
+import * as opener from "@tauri-apps/plugin-opener";
+
+vi.mock("../api/auth");
+vi.mock("@tauri-apps/plugin-opener");
+
+describe("Login", () => {
+  beforeEach(() => {
+    vi.mocked(authApi.loginStart).mockResolvedValue(undefined);
+    vi.mocked(authApi.onLoginStatus).mockImplementation(() => Promise.resolve(() => {}));
+    vi.mocked(opener.openUrl).mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+  });
+
+  it("shows the device code once the backend reports awaiting_user", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+
+    render(<Login onLoggedIn={() => {}} />);
+
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /log in with github/i }));
+    await waitFor(() => expect(authApi.loginStart).toHaveBeenCalled());
+
+    capturedCallback({
+      status: "awaiting_user",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+    });
+
+    expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
+  });
+
+  it("calls onLoggedIn when the backend reports success", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+    const onLoggedIn = vi.fn();
+
+    render(<Login onLoggedIn={onLoggedIn} />);
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /log in with github/i }));
+    await waitFor(() => expect(authApi.loginStart).toHaveBeenCalled());
+
+    capturedCallback({ status: "success" });
+
+    await waitFor(() => expect(onLoggedIn).toHaveBeenCalled());
+  });
+
+  it("shows a message when the backend reports denied", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+
+    render(<Login onLoggedIn={() => {}} />);
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    capturedCallback({ status: "denied" });
+
+    expect(await screen.findByText(/login was denied/i)).toBeInTheDocument();
+  });
+
+  it("shows the error message when the backend reports an error", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+
+    render(<Login onLoggedIn={() => {}} />);
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    capturedCallback({ status: "error", error: "network unreachable" });
+
+    expect(await screen.findByText(/login failed: network unreachable/i)).toBeInTheDocument();
+  });
+
+  it("automatically opens the verification link once the device code arrives", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+
+    render(<Login onLoggedIn={() => {}} />);
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    capturedCallback({
+      status: "awaiting_user",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+    });
+
+    await waitFor(() => expect(opener.openUrl).toHaveBeenCalledWith("https://github.com/login/device"));
+  });
+
+  it("copies the device code to the clipboard when Copy is clicked", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+
+    render(<Login onLoggedIn={() => {}} />);
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    capturedCallback({
+      status: "awaiting_user",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /^copy$/i }));
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("ABCD-1234"));
+    expect(await screen.findByRole("button", { name: /copied/i })).toBeInTheDocument();
+  });
+
+  it("still offers a manual fallback link to the verification URL", async () => {
+    let capturedCallback: (status: authApi.LoginStatus) => void = () => {};
+    vi.mocked(authApi.onLoginStatus).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+
+    render(<Login onLoggedIn={() => {}} />);
+    await waitFor(() => expect(authApi.onLoginStatus).toHaveBeenCalled());
+
+    capturedCallback({
+      status: "awaiting_user",
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+    });
+
+    fireEvent.click(await screen.findByRole("link", { name: /open.*manually/i }));
+
+    await waitFor(() => expect(opener.openUrl).toHaveBeenCalledWith("https://github.com/login/device"));
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npm run test -- Login.test.tsx`
+Expected: FAIL — the last three tests fail (`openUrl` is never called, no "Copy"/"Open ... manually" controls exist yet); the first four still pass against the old implementation.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Replace all of `src/components/Login.tsx` with:
+
+```tsx
+import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { loginStart, onLoginStatus, LoginStatus } from "../api/auth";
+
+type Props = {
+  onLoggedIn: () => void;
+};
+
+export function Login({ onLoggedIn }: Props) {
+  const [status, setStatus] = useState<LoginStatus | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    onLoginStatus((newStatus) => {
+      setStatus(newStatus);
+      if (newStatus.status === "awaiting_user") {
+        openUrl(newStatus.verification_uri).catch((error) =>
+          console.error("failed to auto-open the verification link", error),
+        );
+      }
+      if (newStatus.status === "success") {
+        onLoggedIn();
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [onLoggedIn]);
+
+  const handleLogin = async () => {
+    setStatus(null);
+    setCopied(false);
+    try {
+      await loginStart();
+    } catch (error) {
+      console.error("failed to start login", error);
+    }
+  };
+
+  const handleCopyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+    } catch (error) {
+      console.error("failed to copy the device code", error);
+    }
+  };
+
+  const handleOpenManually = (verificationUri: string) => {
+    openUrl(verificationUri).catch((error) =>
+      console.error("failed to open the verification link", error),
+    );
+  };
+
+  return (
+    <div>
+      <button onClick={handleLogin}>Log in with GitHub</button>
+      {status?.status === "awaiting_user" && (
+        <div>
+          <p>We opened {status.verification_uri} in your browser.</p>
+          <span className="device-code">
+            <strong>{status.user_code}</strong>
+            <button onClick={() => handleCopyCode(status.user_code)}>{copied ? "Copied!" : "Copy"}</button>
+          </span>
+          <p>
+            Didn't open automatically?{" "}
+            <a
+              href={status.verification_uri}
+              onClick={(event) => {
+                event.preventDefault();
+                handleOpenManually(status.verification_uri);
+              }}
+            >
+              Open {status.verification_uri} manually
+            </a>
+          </p>
+        </div>
+      )}
+      {status?.status === "denied" && <p>Login was denied.</p>}
+      {status?.status === "expired" && <p>The login code expired. Try again.</p>}
+      {status?.status === "error" && <p>Login failed: {status.error}</p>}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npm run test -- Login.test.tsx`
+Expected: PASS — all 7 tests pass.
+
+- [ ] **Step 5: Add the device-code box style**
+
+Append to `src/App.css`:
+
+```css
+.device-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 1.2em;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+}
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/components/Login.tsx src/components/Login.test.tsx src/App.css
+git commit -m "Auto-open the GitHub verification link and add a code copy button"
+```
+
+---
+
+### Task 14: Frontend — delete `ProjectList` and `ReleaseList`
+
+**Files:**
+- Delete: `src/components/ProjectList.tsx`
+- Delete: `src/components/ProjectList.test.tsx`
+- Delete: `src/components/ReleaseList.tsx`
+- Delete: `src/components/ReleaseList.test.tsx`
+
+Both are fully superseded: `ProjectList` (the always-visible favorites/all-projects list) by `TabBar` + `BindProjectPopup` (Tasks 9–10); `ReleaseList` (the build-type dropdown + flat option list) by `BuildBrowser` (Task 11). Neither is referenced anywhere once Task 15 rewrites `App.tsx`, so this task can run any time before Task 15 lands.
+
+- [ ] **Step 1: Delete the files**
+
+```bash
+git rm src/components/ProjectList.tsx src/components/ProjectList.test.tsx src/components/ReleaseList.tsx src/components/ReleaseList.test.tsx
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git commit -m "Remove ProjectList and ReleaseList, superseded by TabBar/BindProjectPopup/BuildBrowser"
+```
+
+(`npm run test` will still show failures at this point, since `App.tsx` and `App.test.tsx` haven't been updated yet — that's Task 15, next.)
+
+---
 </content>
