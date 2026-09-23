@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { isLoggedIn, logout } from "./api/auth";
+import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { getWorkspaceRoot } from "./api/settings";
 import {
@@ -219,7 +219,13 @@ function App() {
         .catch((error) => console.error("failed to load workspace root", error));
       listProjects()
         .then(setProjects)
-        .catch((error) => console.error("failed to load projects", error));
+        .catch((error) => {
+          if (error === SESSION_EXPIRED_ERROR) {
+            setLoggedIn(false);
+            return;
+          }
+          console.error("failed to load projects", error);
+        });
     }
   }, [loggedIn]);
 
