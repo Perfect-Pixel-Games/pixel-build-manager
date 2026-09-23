@@ -2,6 +2,7 @@ mod auth;
 mod github;
 mod settings;
 mod sync;
+mod updater;
 
 use auth::device_flow::DeviceFlowClient;
 use auth::login::{perform_device_login, LoginStatus};
@@ -16,6 +17,7 @@ use sync::cache::{active_dir, cache_dir, cached_asset_path, list_cached_asset_id
 use sync::launch::{find_active_executable, launch_executable};
 use sync::orchestrator::{ensure_asset_cached, sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
+use updater::start_background_updates;
 
 const GITHUB_CLIENT_ID: &str = "Ov23ligQDGOJvlWsEXJc";
 
@@ -477,6 +479,11 @@ pub fn run() {
                 settings_lock: Mutex::new(()),
                 active_operations: Mutex::new(HashSet::new()),
             });
+
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            start_background_updates(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
