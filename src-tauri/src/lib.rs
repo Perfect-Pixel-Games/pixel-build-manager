@@ -480,13 +480,9 @@ pub fn run() {
                 active_operations: Mutex::new(HashSet::new()),
             });
 
-            // Debug (`tauri dev`) builds never check for or install updates.
-            #[cfg(not(debug_assertions))]
-            {
-                app.handle()
-                    .plugin(tauri_plugin_updater::Builder::new().build())?;
-                start_background_updates(app.handle().clone());
-            }
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            start_background_updates(app.handle().clone());
 
             Ok(())
         })

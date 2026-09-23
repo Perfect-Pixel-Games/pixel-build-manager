@@ -10,11 +10,15 @@ use tauri_plugin_updater::UpdaterExt;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
-/// Starts the background update-check loop. No-op if the binary's channel
-/// is unknown (see `Channel::current`) -- callers are expected to only call
-/// this for release builds in the first place (see `lib.rs`'s `#[cfg(not(debug_assertions))]`
-/// gate), but this is a second, cheap line of defense.
+/// Starts the background update-check loop. No-op in debug (`tauri dev`)
+/// builds, and no-op if the binary's channel is unknown (see
+/// `Channel::current`).
 pub fn start_background_updates(app: AppHandle) {
+    if cfg!(debug_assertions) {
+        eprintln!("debug build; skipping auto-update checks");
+        return;
+    }
+
     let Some(channel) = Channel::current() else {
         eprintln!("update channel unknown; skipping auto-update checks");
         return;
