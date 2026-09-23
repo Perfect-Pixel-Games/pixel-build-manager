@@ -14,11 +14,17 @@ const release: Release = {
   published_at: null,
   assets: [],
 };
-const asset: ReleaseAsset = {
+const shippingAsset: ReleaseAsset = {
   id: 10,
-  name: "build.zip",
+  name: "shipping.zip",
   size: 1000,
-  browser_download_url: "https://example.com/build.zip",
+  browser_download_url: "https://example.com/shipping.zip",
+};
+const testAsset: ReleaseAsset = {
+  id: 11,
+  name: "test.zip",
+  size: 500,
+  browser_download_url: "https://example.com/test.zip",
 };
 
 describe("useSync", () => {
@@ -26,53 +32,53 @@ describe("useSync", () => {
     vi.mocked(syncApi.onSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
   });
 
-  it("transitions to done and resolves true after a successful sync", async () => {
+  it("syncs a single asset and transitions to done", async () => {
     vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
     const { result } = renderHook(() => useSync("org/repo"));
 
     let succeeded: boolean | undefined;
     await act(async () => {
-      succeeded = await result.current.sync(release, asset);
+      succeeded = await result.current.syncConfigs(release, [shippingAsset]);
     });
 
     expect(succeeded).toBe(true);
     expect(result.current.state).toEqual({ phase: "done" });
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledWith("org/repo", release, shippingAsset);
   });
 
-  it("transitions to error and rethrows when the sync call rejects", async () => {
-    vi.mocked(syncApi.syncReleaseAsset).mockRejectedValue(new Error("network down"));
+  it("syncs multiple assets one at a time, in order", async () => {
+    const callOrder: string[] = [];
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(async (_projectKey, _release, asset) => {
+      callOrder.push(asset.name);
+    });
     const { result } = renderHook(() => useSync("org/repo"));
 
     await act(async () => {
-      await expect(result.current.sync(release, asset)).rejects.toThrow("network down");
+      await result.current.syncConfigs(release, [shippingAsset, testAsset]);
     });
 
-    expect(result.current.state).toEqual({ phase: "error", message: "Error: network down" });
+    expect(callOrder).toEqual(["shipping.zip", "test.zip"]);
   });
 
-  it("transitions to done and resolves true after a successful check", async () => {
-    vi.mocked(syncApi.checkReleaseAsset).mockResolvedValue(undefined);
+  it("reports which config is currently syncing", async () => {
+    let resolveShipping: () => void = () => {};
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(
+      () => new Promise((resolve) => (resolveShipping = () => resolve(undefined))),
+    );
     const { result } = renderHook(() => useSync("org/repo"));
 
-    let succeeded: boolean | undefined;
-    await act(async () => {
-      succeeded = await result.current.check(asset);
+    act(() => {
+      result.current.syncConfigs(release, [shippingAsset]);
     });
 
-    expect(succeeded).toBe(true);
-    expect(syncApi.checkReleaseAsset).toHaveBeenCalledWith("org/repo", asset);
-    expect(result.current.state).toEqual({ phase: "done" });
-  });
-
-  it("transitions to error and rethrows when the check call rejects", async () => {
-    vi.mocked(syncApi.checkReleaseAsset).mockRejectedValue(new Error("disk full"));
-    const { result } = renderHook(() => useSync("org/repo"));
-
-    await act(async () => {
-      await expect(result.current.check(asset)).rejects.toThrow("disk full");
+    expect(result.current.state).toEqual({
+      phase: "syncing",
+      configName: "shipping.zip",
+      downloaded: 0,
+      total: 1000,
     });
 
-    expect(result.current.state).toEqual({ phase: "error", message: "Error: disk full" });
+    await act(async () => resolveShipping());
   });
 
   it("updates progress only for matching project_key events", async () => {
@@ -85,69 +91,57 @@ describe("useSync", () => {
     const { result } = renderHook(() => useSync("org/repo"));
 
     act(() => {
-      result.current.sync(release, asset);
+      result.current.syncConfigs(release, [shippingAsset]);
     });
     act(() => {
       capturedCallback({ project_key: "org/other-repo", downloaded: 5, total: 1000 });
     });
-    expect(result.current.state).toEqual({ phase: "syncing", downloaded: 0, total: 1000 });
+    expect(result.current.state).toMatchObject({ downloaded: 0, total: 1000 });
 
     act(() => {
       capturedCallback({ project_key: "org/repo", downloaded: 500, total: 1000 });
     });
     await waitFor(() =>
-      expect(result.current.state).toEqual({ phase: "syncing", downloaded: 500, total: 1000 }),
+      expect(result.current.state).toMatchObject({ downloaded: 500, total: 1000 }),
     );
   });
 
-  it("ignores a second sync() call while one is already in flight, resolving it to false", async () => {
+  it("transitions to error and rethrows when a sync call rejects, without syncing the rest of the batch", async () => {
+    vi.mocked(syncApi.syncReleaseAsset).mockRejectedValue(new Error("network down"));
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    await act(async () => {
+      await expect(result.current.syncConfigs(release, [shippingAsset, testAsset])).rejects.toThrow(
+        "network down",
+      );
+    });
+
+    expect(result.current.state).toEqual({ phase: "error", message: "Error: network down" });
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a second syncConfigs() call while one is already in flight, resolving it to false", async () => {
     let resolveFirstSync: () => void = () => {};
     vi.mocked(syncApi.syncReleaseAsset).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveFirstSync = () => resolve(undefined);
-        }),
+      () => new Promise((resolve) => (resolveFirstSync = () => resolve(undefined))),
     );
     const { result } = renderHook(() => useSync("org/repo"));
 
     let firstCall!: Promise<boolean>;
     let secondCall!: Promise<boolean>;
     act(() => {
-      firstCall = result.current.sync(release, asset);
+      firstCall = result.current.syncConfigs(release, [shippingAsset]);
     });
     act(() => {
-      // Second call while the first is still pending -- should be a no-op.
-      secondCall = result.current.sync(release, asset);
+      secondCall = result.current.syncConfigs(release, [testAsset]);
     });
 
     expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1);
     await expect(secondCall).resolves.toBe(false);
 
-    await act(async () => {
-      resolveFirstSync();
-    });
+    await act(async () => resolveFirstSync());
 
     await expect(firstCall).resolves.toBe(true);
     expect(result.current.state).toEqual({ phase: "done" });
-
-    // Once the first call has finished, sync() should work again.
-    vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
-    await act(async () => {
-      await result.current.sync(release, asset);
-    });
-    expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(2);
-  });
-
-  it("ignores a check() call while a sync() is already in flight (shared guard)", async () => {
-    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(() => new Promise(() => {}));
-    const { result } = renderHook(() => useSync("org/repo"));
-
-    act(() => {
-      result.current.sync(release, asset);
-    });
-    const checkResult = await act(async () => result.current.check(asset));
-
-    expect(checkResult).toBe(false);
-    expect(syncApi.checkReleaseAsset).not.toHaveBeenCalled();
   });
 });
