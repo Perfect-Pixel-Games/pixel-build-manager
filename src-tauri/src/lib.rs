@@ -7,6 +7,7 @@ mod version;
 
 use auth::device_flow::DeviceFlowClient;
 use auth::login::{perform_device_login, LoginStatus};
+use auth::session::ensure_valid_access_token;
 use auth::token_store::{KeyringTokenStore, TokenStore};
 use github::client::{GithubClient, ReleaseSummary};
 use serde::Serialize;
@@ -33,6 +34,11 @@ pub struct AppState {
     /// two can never race against each other's filesystem writes for the
     /// same project (e.g. clearing a cache mid-download).
     pub active_operations: Mutex<HashSet<String>>,
+    /// Serializes token refreshes so two concurrent GitHub-backed commands
+    /// can't both try to redeem the same (single-use) refresh token at
+    /// once. Held across an `.await`, so this must be a tokio mutex rather
+    /// than `std::sync::Mutex`.
+    pub token_refresh_lock: tokio::sync::Mutex<()>,
 }
 
 /// Marks `project_key` as having an in-flight operation, failing if one is
@@ -102,17 +108,20 @@ pub struct ProjectListItem {
     pub favorite: bool,
 }
 
-fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
-    let token = state
-        .token_store
-        .load()?
-        .ok_or_else(|| "not logged in".to_string())?;
+async fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
+    let _guard = state.token_refresh_lock.lock().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be after the unix epoch")
+        .as_secs();
+    let device_flow_client = DeviceFlowClient::new(GITHUB_CLIENT_ID.to_string());
+    let token = ensure_valid_access_token(&device_flow_client, state.token_store.as_ref(), now).await?;
     Ok(GithubClient::new(token))
 }
 
 #[tauri::command]
 async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectListItem>, String> {
-    let client = build_github_client(&state)?;
+    let client = build_github_client(&state).await?;
     let repos = client
         .list_accessible_repos_with_releases()
         .await
@@ -145,7 +154,7 @@ async fn list_releases_for_project(
     let (owner, repo) = full_name
         .split_once('/')
         .ok_or_else(|| format!("invalid project full_name: {}", full_name))?;
-    let client = build_github_client(&state)?;
+    let client = build_github_client(&state).await?;
     client
         .list_releases(owner, repo)
         .await
@@ -242,7 +251,7 @@ async fn sync_release_asset_inner(
         .clone()
         .ok_or_else(|| "workspace root not set".to_string())?;
 
-    let client = build_github_client(state)?;
+    let client = build_github_client(state).await?;
     let (owner, repo) = project_key
         .split_once('/')
         .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
@@ -316,7 +325,7 @@ async fn check_release_asset_inner(
 ) -> Result<(), String> {
     let workspace_root = workspace_root_from_settings(state)?;
 
-    let client = build_github_client(state)?;
+    let client = build_github_client(state).await?;
     let (owner, repo) = project_key
         .split_once('/')
         .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
@@ -485,6 +494,7 @@ pub fn run() {
                 settings_path,
                 settings_lock: Mutex::new(()),
                 active_operations: Mutex::new(HashSet::new()),
+                token_refresh_lock: tokio::sync::Mutex::new(()),
             });
 
             app.handle()
