@@ -4,13 +4,16 @@ import App, { ProjectDetail } from "./App";
 import * as projectsApi from "./api/projects";
 import * as syncApi from "./api/sync";
 import * as authApi from "./api/auth";
+import { SESSION_EXPIRED_ERROR } from "./api/auth";
 import * as versionApi from "./api/version";
+import * as settingsApi from "./api/settings";
 import type { Release } from "./api/projects";
 
 vi.mock("./api/projects");
 vi.mock("./api/sync");
 vi.mock("./api/auth");
 vi.mock("./api/version");
+vi.mock("./api/settings");
 
 const release: Release = {
   id: 1,
@@ -64,5 +67,19 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("Release 0.4.0")).toBeInTheDocument();
+  });
+
+  it("routes back to the Login screen when loading projects reports the session has expired", async () => {
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(true);
+    vi.mocked(authApi.onLoginStatus).mockResolvedValue(() => {});
+    vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
+    vi.mocked(settingsApi.getWorkspaceRoot).mockResolvedValue("D:\\Builds");
+    vi.mocked(projectsApi.listProjects).mockRejectedValue(SESSION_EXPIRED_ERROR);
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: /log in with github/i }),
+    ).toBeInTheDocument();
   });
 });
