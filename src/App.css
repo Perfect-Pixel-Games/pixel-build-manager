@@ -121,3 +121,39 @@ button {
     background-color: #0f0f0f69;
   }
 }
+
+.busy-overlay-container {
+  position: relative;
+}
+
+.busy-overlay-content--dimmed {
+  opacity: 0.45;
+  filter: grayscale(40%);
+  pointer-events: none;
+}
+
+.busy-overlay-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.throbber {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
