@@ -152,7 +152,7 @@ jobs:
         run: npm ci
 
       - name: Write version into tauri.conf.json
-        shell: pwsh
+        shell: powershell
         run: |
           $configPath = "src-tauri/tauri.conf.json"
           $config = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -195,7 +195,7 @@ jobs:
           merge-multiple: true
 
       - name: Generate latest.json update manifest
-        shell: pwsh
+        shell: powershell
         run: |
           $sigFile = Get-ChildItem -Path artifacts/release-downloads -Recurse -Filter "*-setup.exe.sig" | Select-Object -First 1
           if (-not $sigFile) {
