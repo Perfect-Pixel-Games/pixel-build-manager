@@ -115,7 +115,8 @@ async fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
         .expect("system clock must be after the unix epoch")
         .as_secs();
     let device_flow_client = DeviceFlowClient::new(GITHUB_CLIENT_ID.to_string());
-    let token = ensure_valid_access_token(&device_flow_client, state.token_store.as_ref(), now).await?;
+    let token =
+        ensure_valid_access_token(&device_flow_client, state.token_store.as_ref(), now).await?;
     Ok(GithubClient::new(token))
 }
 

@@ -126,12 +126,13 @@ impl DeviceFlowClient {
             .map_err(|e| AuthError::UnexpectedResponse(e.to_string()))?;
 
         if let Some(access_token) = raw.access_token {
-            let (Some(refresh_token), Some(expires_in), Some(refresh_token_expires_in)) =
-                (raw.refresh_token, raw.expires_in, raw.refresh_token_expires_in)
-            else {
+            let (Some(refresh_token), Some(expires_in), Some(refresh_token_expires_in)) = (
+                raw.refresh_token,
+                raw.expires_in,
+                raw.refresh_token_expires_in,
+            ) else {
                 return Err(AuthError::UnexpectedResponse(
-                    "access_token response is missing refresh_token/expires_in fields"
-                        .to_string(),
+                    "access_token response is missing refresh_token/expires_in fields".to_string(),
                 ));
             };
             return Ok(PollOutcome::AccessToken(TokenResponse {
@@ -158,7 +159,10 @@ impl DeviceFlowClient {
     /// pair. GitHub rotates refresh tokens on every use (the old one stops
     /// working), so callers must persist the returned `refresh_token`, not
     /// reuse the one passed in.
-    pub async fn refresh_access_token(&self, refresh_token: &str) -> Result<TokenResponse, AuthError> {
+    pub async fn refresh_access_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<TokenResponse, AuthError> {
         #[derive(Deserialize)]
         struct RawResponse {
             access_token: Option<String>,
@@ -195,7 +199,12 @@ impl DeviceFlowClient {
             .await
             .map_err(|e| AuthError::UnexpectedResponse(e.to_string()))?;
 
-        if let (Some(access_token), Some(refresh_token), Some(expires_in), Some(refresh_token_expires_in)) = (
+        if let (
+            Some(access_token),
+            Some(refresh_token),
+            Some(expires_in),
+            Some(refresh_token_expires_in),
+        ) = (
             raw.access_token,
             raw.refresh_token,
             raw.expires_in,

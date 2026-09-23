@@ -100,7 +100,9 @@ mod tests {
         );
         let client = DeviceFlowClient::with_base_url("client-id".to_string(), server.uri());
 
-        let token = ensure_valid_access_token(&client, &store, 1_000).await.unwrap();
+        let token = ensure_valid_access_token(&client, &store, 1_000)
+            .await
+            .unwrap();
 
         assert_eq!(token, "ghu_current");
     }
@@ -130,7 +132,9 @@ mod tests {
         );
         let client = DeviceFlowClient::with_base_url("client-id".to_string(), server.uri());
 
-        let token = ensure_valid_access_token(&client, &store, 1_000).await.unwrap();
+        let token = ensure_valid_access_token(&client, &store, 1_000)
+            .await
+            .unwrap();
 
         assert_eq!(token, "ghu_new");
         let raw = store.load().unwrap().unwrap();
