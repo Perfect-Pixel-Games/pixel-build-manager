@@ -161,6 +161,10 @@ jobs:
 
       - name: Build Tauri app
         shell: cmd
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PIXEL_BUILD_MANAGER_CHANNEL: ${{ github.ref == 'refs/heads/main' && 'release' || 'prerelease' }}
         run: npm run tauri build
 
       - name: Upload installer artifact
@@ -189,6 +193,28 @@ jobs:
         with:
           path: artifacts/release-downloads
           merge-multiple: true
+
+      - name: Generate latest.json update manifest
+        shell: pwsh
+        run: |
+          $sigFile = Get-ChildItem -Path artifacts/release-downloads -Recurse -Filter "*-setup.exe.sig" | Select-Object -First 1
+          if (-not $sigFile) {
+            throw "no NSIS .sig file found under artifacts/release-downloads -- was createUpdaterArtifacts enabled and signing secrets set?"
+          }
+          $signature = (Get-Content $sigFile.FullName -Raw).Trim()
+          $installerName = $sigFile.Name -replace '\.sig$', ''
+          $tag = "${{ needs.compute-version.outputs.tag }}"
+          $manifest = @{
+            version = $tag
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature
+                url = "https://github.com/Perfect-Pixel-Games/pixel-build-manager/releases/download/$tag/$installerName"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 10 | Set-Content -Path artifacts/release-downloads/latest.json
 
       - name: Create release tag
         shell: cmd
