@@ -17,6 +17,7 @@ use sync::cache::{active_dir, cache_dir, cached_asset_path, list_cached_asset_id
 use sync::launch::{find_active_executable, launch_executable};
 use sync::orchestrator::{ensure_asset_cached, sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
+use updater::start_background_updates;
 
 const GITHUB_CLIENT_ID: &str = "Ov23ligQDGOJvlWsEXJc";
 
@@ -478,6 +479,15 @@ pub fn run() {
                 settings_lock: Mutex::new(()),
                 active_operations: Mutex::new(HashSet::new()),
             });
+
+            // Debug (`tauri dev`) builds never check for or install updates.
+            #[cfg(not(debug_assertions))]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                start_background_updates(app.handle().clone());
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
