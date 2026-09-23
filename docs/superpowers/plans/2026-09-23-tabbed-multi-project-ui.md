@@ -3126,4 +3126,426 @@ git commit -m "Add BindProjectPopup component"
 ```
 
 ---
+
+### Task 11: Frontend — `BuildBrowser` component (replaces `ReleaseList`)
+
+**Files:**
+- Create: `src/components/BuildBrowser.tsx`
+- Create: `src/components/BuildBrowser.test.tsx`
+
+Search + scrollable release list + per-project build-config checkboxes + a tri-state sync button. Unlike `ReleaseList`, this never touches per-asset cache/delete state (no more per-row Delete button — the whole project's disk footprint is cleared via `ClearCacheButton` instead) and never shows a "build type" dropdown (every config checkbox is visible at once).
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/components/BuildBrowser.test.tsx`:
+
+```tsx
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { BuildBrowser } from "./BuildBrowser";
+import type { Release } from "../api/projects";
+
+const releases: Release[] = [
+  {
+    id: 1,
+    tag_name: "0.2.14",
+    name: "LastBeacon 0.2.14",
+    prerelease: false,
+    published_at: "2026-09-01T00:00:00Z",
+    assets: [
+      { id: 10, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/a" },
+      { id: 11, name: "test.zip", size: 100, browser_download_url: "https://example.com/b" },
+    ],
+  },
+  {
+    id: 2,
+    tag_name: "0.2.13",
+    name: "LastBeacon 0.2.13",
+    prerelease: false,
+    published_at: "2026-08-01T00:00:00Z",
+    assets: [{ id: 8, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/c" }],
+  },
+  {
+    id: 3,
+    tag_name: "0.3.0-rc1",
+    name: "LastBeacon 0.3.0-rc1",
+    prerelease: true,
+    published_at: "2026-09-10T00:00:00Z",
+    assets: [{ id: 30, name: "ps4.zip", size: 100, browser_download_url: "https://example.com/rc" }],
+  },
+];
+
+const noop = () => {};
+
+describe("BuildBrowser", () => {
+  it("lists releases but never prereleases", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag={null}
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.13" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "LastBeacon 0.3.0-rc1" })).not.toBeInTheDocument();
+  });
+
+  it("filters the release list by the search box", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag={null}
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search releases"), { target: { value: "0.2.13" } });
+
+    expect(screen.queryByRole("button", { name: "LastBeacon 0.2.14" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.13" })).toBeInTheDocument();
+  });
+
+  it("lists every build config across all releases, including prerelease-only ones", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag={null}
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByLabelText("shipping.zip")).toBeInTheDocument();
+    expect(screen.getByLabelText("test.zip")).toBeInTheDocument();
+    expect(screen.getByLabelText("ps4.zip")).toBeInTheDocument();
+  });
+
+  it("calls onSelectRelease when a release row is clicked", () => {
+    const onSelectRelease = vi.fn();
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag={null}
+        onSelectRelease={onSelectRelease}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "LastBeacon 0.2.14" }));
+
+    expect(onSelectRelease).toHaveBeenCalledWith("0.2.14");
+  });
+
+  it("marks the selected release's button as pressed", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag="0.2.13"
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.13" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("disables a config checkbox when the selected release has no matching asset", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag="0.2.13"
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    // 0.2.13 only has shipping.zip -- test.zip must be disabled for it.
+    expect(screen.getByLabelText("shipping.zip")).not.toBeDisabled();
+    expect(screen.getByLabelText("test.zip")).toBeDisabled();
+  });
+
+  it("leaves every config checkbox enabled when no release is selected yet", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag={null}
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByLabelText("shipping.zip")).not.toBeDisabled();
+    expect(screen.getByLabelText("test.zip")).not.toBeDisabled();
+  });
+
+  it("calls onToggleConfig with the config name and new checked state", () => {
+    const onToggleConfig = vi.fn();
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag={null}
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={onToggleConfig}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("shipping.zip"));
+
+    expect(onToggleConfig).toHaveBeenCalledWith("shipping.zip", true);
+  });
+
+  it("disables the sync button when nothing ticked is available for the selected release", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag="0.2.14"
+        onSelectRelease={noop}
+        tickedConfigs={[]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
+  });
+
+  it("shows Sync and calls onSync with only the missing ticked assets", () => {
+    const onSync = vi.fn();
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag="0.2.14"
+        onSelectRelease={noop}
+        tickedConfigs={["shipping.zip", "test.zip"]}
+        onToggleConfig={noop}
+        syncedConfigs={["test.zip"]}
+        onSync={onSync}
+        disabled={false}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Sync" });
+    fireEvent.click(button);
+
+    expect(onSync).toHaveBeenCalledWith(releases[0], [releases[0].assets[0]]);
+  });
+
+  it("shows a checkmark and re-verifies every ticked asset once fully synced", () => {
+    const onSync = vi.fn();
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag="0.2.14"
+        onSelectRelease={noop}
+        tickedConfigs={["shipping.zip"]}
+        onToggleConfig={noop}
+        syncedConfigs={["shipping.zip"]}
+        onSync={onSync}
+        disabled={false}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "✓ Synced" });
+    fireEvent.click(button);
+
+    expect(onSync).toHaveBeenCalledWith(releases[0], [releases[0].assets[0]]);
+  });
+
+  it("disables the search box, release rows, checkboxes, and sync button when disabled", () => {
+    render(
+      <BuildBrowser
+        releases={releases}
+        selectedReleaseTag="0.2.14"
+        onSelectRelease={noop}
+        tickedConfigs={["shipping.zip"]}
+        onToggleConfig={noop}
+        syncedConfigs={[]}
+        onSync={noop}
+        disabled
+      />,
+    );
+
+    expect(screen.getByLabelText("Search releases")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeDisabled();
+    expect(screen.getByLabelText("shipping.zip")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npm run test -- BuildBrowser.test.tsx`
+Expected: FAIL — `src/components/BuildBrowser.tsx` does not exist yet.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Create `src/components/BuildBrowser.tsx`:
+
+```tsx
+import { useMemo, useState } from "react";
+import type { Release, ReleaseAsset } from "../api/projects";
+
+type Props = {
+  releases: Release[];
+  selectedReleaseTag: string | null;
+  onSelectRelease: (tag: string) => void;
+  tickedConfigs: string[];
+  onToggleConfig: (configName: string, ticked: boolean) => void;
+  /** Configs already extracted for the *selected* release. */
+  syncedConfigs: string[];
+  onSync: (release: Release, assets: ReleaseAsset[]) => void;
+  disabled: boolean;
+};
+
+export function BuildBrowser({
+  releases,
+  selectedReleaseTag,
+  onSelectRelease,
+  tickedConfigs,
+  onToggleConfig,
+  syncedConfigs,
+  onSync,
+  disabled,
+}: Props) {
+  const [search, setSearch] = useState("");
+
+  // Every build config the project has ever produced, across every release
+  // -- including prereleases -- deliberately not scoped to the releases
+  // visible below, so a config that's so far only shipped in a prerelease
+  // still shows up as a future sync target once a real release adds it.
+  const buildConfigs = useMemo(() => {
+    const names = new Set<string>();
+    for (const release of releases) {
+      for (const asset of release.assets) {
+        names.add(asset.name);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [releases]);
+
+  const visibleReleases = useMemo(() => {
+    const term = search.toLowerCase();
+    return releases
+      .filter((release) => !release.prerelease)
+      .filter((release) => (release.name ?? release.tag_name).toLowerCase().includes(term));
+  }, [releases, search]);
+
+  const selectedRelease = releases.find((release) => release.tag_name === selectedReleaseTag) ?? null;
+
+  const availableTickedAssets: ReleaseAsset[] = selectedRelease
+    ? selectedRelease.assets.filter((asset) => tickedConfigs.includes(asset.name))
+    : [];
+  const missingAssets = availableTickedAssets.filter((asset) => !syncedConfigs.includes(asset.name));
+  const fullySynced = availableTickedAssets.length > 0 && missingAssets.length === 0;
+
+  const handleSyncClick = () => {
+    if (!selectedRelease || availableTickedAssets.length === 0) {
+      return;
+    }
+    onSync(selectedRelease, fullySynced ? availableTickedAssets : missingAssets);
+  };
+
+  return (
+    <div>
+      <input
+        aria-label="Search releases"
+        value={search}
+        disabled={disabled}
+        onChange={(event) => setSearch(event.target.value)}
+      />
+      <ul>
+        {visibleReleases.map((release) => (
+          <li key={release.id}>
+            <button
+              aria-pressed={release.tag_name === selectedReleaseTag}
+              disabled={disabled}
+              onClick={() => onSelectRelease(release.tag_name)}
+            >
+              {release.name ?? release.tag_name}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <fieldset>
+        <legend>Build configs</legend>
+        {buildConfigs.map((config) => {
+          const availableForSelected =
+            !selectedRelease || selectedRelease.assets.some((asset) => asset.name === config);
+          return (
+            <label key={config}>
+              <input
+                type="checkbox"
+                aria-label={config}
+                checked={tickedConfigs.includes(config)}
+                disabled={disabled || !availableForSelected}
+                onChange={(event) => onToggleConfig(config, event.target.checked)}
+              />
+              {config}
+            </label>
+          );
+        })}
+      </fieldset>
+      <button disabled={disabled || availableTickedAssets.length === 0} onClick={handleSyncClick}>
+        {fullySynced ? "✓ Synced" : "Sync"}
+      </button>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npm run test -- BuildBrowser.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/BuildBrowser.tsx src/components/BuildBrowser.test.tsx
+git commit -m "Add BuildBrowser component (replaces ReleaseList)"
+```
+
+---
 </content>
