@@ -8,14 +8,11 @@ describe("SyncStatus", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows download percentage while syncing", () => {
-    render(<SyncStatus state={{ phase: "syncing", downloaded: 500, total: 1000 }} />);
-    expect(screen.getByText(/50%/)).toBeInTheDocument();
-  });
-
-  it("shows a finishing-up message once fully downloaded but not yet done", () => {
-    render(<SyncStatus state={{ phase: "syncing", downloaded: 1000, total: 1000 }} />);
-    expect(screen.getByText(/finishing up/i)).toBeInTheDocument();
+  it("renders nothing while syncing (the busy overlay owns that display)", () => {
+    const { container } = render(
+      <SyncStatus state={{ phase: "syncing", configName: "shipping.zip", downloaded: 500, total: 1000 }} />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows a success message when done", () => {
