@@ -4784,4 +4784,62 @@ git commit -m "Wire tab binding, theming, and BuildBrowser together in App"
 ```
 
 ---
+
+### Task 16: Final verification
+
+- [ ] **Step 1: Run the full backend test suite**
+
+Run: `cargo test --manifest-path src-tauri/Cargo.toml`
+Expected: PASS.
+
+- [ ] **Step 2: Run Rust formatting and lint checks (matches CI's `validate` job)**
+
+Run: `cargo fmt --manifest-path src-tauri/Cargo.toml --check` then `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+Expected: both PASS with no diffs/warnings.
+
+- [ ] **Step 3: Run the full frontend test suite**
+
+Run: `npm run test`
+Expected: PASS.
+
+- [ ] **Step 4: Verify the frontend typechecks and builds**
+
+Run: `npm run build`
+Expected: PASS.
+
+- [ ] **Step 5: Manually verify in a dev build**
+
+Run: `npm run tauri dev`
+
+Walk through, in order:
+1. Log in (or confirm already logged in) and set a workspace root if prompted.
+2. Confirm the main view shows only a `+` button with no tabs.
+3. Click `+`, confirm the popup lists your accessible projects with search and favorite stars working, and bind one.
+4. Confirm its tab opens automatically and is marked active.
+5. In the project view: search filters the release list; only non-prerelease releases appear; clicking a release row selects it; build-config checkboxes reflect that project's known configs, with ones absent from the selected release grayed out.
+6. Tick one or two configs, click **Sync**, and confirm: the panel dims in place (not replaced) with a centered throbber + "Downloading `<config>`: NN%" while it's in flight, then the button becomes **✓ Synced** and a per-config **Open Folder** + **Launch** button pair appears below.
+7. Click **✓ Synced** again and confirm it re-syncs (throbber reappears) rather than being inert.
+8. Click **Open Folder** and **Launch** for a synced config and confirm both work.
+9. Toggle the theme control through Light/Dark/System and confirm the UI switches instantly and the choice survives an app restart.
+10. Close the tab via its `×` and confirm the project reappears in the `+` popup.
+11. Confirm the version label still renders bottom-right, below everything else, in every screen (Login, workspace setup, main view).
+
+Expected: every step behaves as described, with no console errors.
+
+- [ ] **Step 6: Final commit (if manual verification turned up fixes)**
+
+```bash
+git add -A
+git commit -m "Fix issues found during manual verification"
+```
+
+(Skip this step if Step 5 required no changes.)
+
+---
+
+## Self-Review Notes
+
+- **Spec coverage:** every section of `docs/superpowers/specs/2026-09-23-tabbed-multi-project-ui-design.md` maps to a task — data model/persistence → Tasks 1–3; theming → Tasks 5, 15; tab bar & binding → Tasks 9–10, 15; per-project detail view (search/list/checkboxes/sync/busy overlay/launch) → Tasks 7, 8, 11, 12, 15; login screen → Task 13; footer → Task 15; testing approach → covered throughout (Rust unit tests in Tasks 1–2, frontend component tests in Tasks 5–13, 15).
+- **Type consistency checked:** `SyncState`'s `"syncing"` variant carries `configName` consistently from Task 6 (`useSync`) through Task 7 (`SyncStatus`) and Task 15 (`ProjectDetail`'s `busyLabel`); `Theme` (`"light" | "dark" | "system"`) is consistent from Task 1's Rust enum (`#[serde(rename_all = "lowercase")]`) through Task 4's TS type through Task 5's `useTheme`/`ThemeToggle`; `build_config_dir`/`find_build_executable`/`extract_archive` naming is consistent between Task 2 and Task 3's `lib.rs` imports.
+- **No placeholders:** every step has literal file contents or exact commands; no "add appropriate tests" or "similar to Task N" steps.
 </content>
