@@ -1369,4 +1369,555 @@ git commit -m "Retarget sync/extraction to per-release-per-config directories"
 ```
 
 ---
+
+### Task 3: Backend — rewrite the Tauri command surface in `lib.rs`
+
+**Files:**
+- Modify: `src-tauri/src/lib.rs` (whole file)
+
+This task removes commands whose concept no longer exists (`check_release_asset`, `get_active_release`, `list_cached_assets`, `delete_cached_asset`, `get_active_executable`, `launch_active_build`, `get_active_build_dir` — none of these survive the redesign, since there's no more single "active build" or per-asset cache browsing/deletion UI), and adds the commands the new frontend needs (tab binding, theme, selected release, ticked configs, synced-configs lookup, per-config executable/launch/dir). `lib.rs` has no `#[cfg(test)]` tests of its own (commands are thin wrappers over the already-tested `settings`/`sync` modules), so this task is verified by `cargo build`/`cargo clippy` rather than new unit tests.
+
+- [ ] **Step 1: Replace the whole file**
+
+Replace all of `src-tauri/src/lib.rs` with:
+
+```rust
+mod auth;
+mod github;
+mod settings;
+mod sync;
+mod updater;
+mod version;
+
+use auth::device_flow::DeviceFlowClient;
+use auth::login::{perform_device_login, LoginStatus};
+use auth::session::ensure_valid_access_token;
+use auth::token_store::{KeyringTokenStore, TokenStore};
+use github::client::{GithubClient, ReleaseSummary};
+use serde::Serialize;
+use settings::{Settings, Theme};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use sync::cache::{build_config_dir, builds_root_dir, cache_dir};
+use sync::launch::{find_build_executable, launch_executable};
+use sync::orchestrator::{sync_asset, SyncRequest};
+use tauri::{Emitter, Manager};
+use updater::channel::Channel;
+use updater::start_background_updates;
+
+const GITHUB_CLIENT_ID: &str = "Ov23ligQDGOJvlWsEXJc";
+
+pub struct AppState {
+    pub token_store: Arc<dyn TokenStore>,
+    pub settings_path: PathBuf,
+    /// Serializes settings.json read-modify-write cycles across commands so
+    /// concurrent writes (e.g. rapid favorite toggles) can't clobber each other.
+    pub settings_lock: Mutex<()>,
+    /// Project keys with an in-flight sync or cache-clear operation, so the
+    /// two can never race against each other's filesystem writes for the
+    /// same project (e.g. clearing a cache mid-download).
+    pub active_operations: Mutex<HashSet<String>>,
+    /// Serializes token refreshes so two concurrent GitHub-backed commands
+    /// can't both try to redeem the same (single-use) refresh token at
+    /// once. Held across an `.await`, so this must be a tokio mutex rather
+    /// than `std::sync::Mutex`.
+    pub token_refresh_lock: tokio::sync::Mutex<()>,
+}
+
+/// Marks `project_key` as having an in-flight operation, failing if one is
+/// already running. Callers must pair this with `end_operation` on every
+/// exit path (success or error).
+fn begin_operation(state: &AppState, project_key: &str) -> Result<(), String> {
+    let mut active = state.active_operations.lock().map_err(|e| e.to_string())?;
+    if !active.insert(project_key.to_string()) {
+        return Err(format!(
+            "another sync or cache operation is already in progress for {project_key}"
+        ));
+    }
+    Ok(())
+}
+
+fn end_operation(state: &AppState, project_key: &str) {
+    if let Ok(mut active) = state.active_operations.lock() {
+        active.remove(project_key);
+    }
+}
+
+fn settings_path_for(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .expect("app data dir must be resolvable")
+        .join("settings.json")
+}
+
+fn workspace_root_from_settings(state: &AppState) -> Result<PathBuf, String> {
+    Settings::load_from(&state.settings_path)
+        .workspace_root
+        .ok_or_else(|| "workspace root not set".to_string())
+}
+
+#[tauri::command]
+async fn login_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let client = DeviceFlowClient::new(GITHUB_CLIENT_ID.to_string());
+    let token_store = state.token_store.clone();
+    let app_for_events = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) =
+            perform_device_login(&client, token_store.as_ref(), move |status: LoginStatus| {
+                let _ = app_for_events.emit("login-status", status);
+            })
+            .await
+        {
+            eprintln!("device login failed: {e}");
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.token_store.clear()
+}
+
+#[tauri::command]
+fn is_logged_in(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.token_store.load()?.is_some())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectListItem {
+    pub full_name: String,
+    pub owner: String,
+    pub name: String,
+    pub favorite: bool,
+}
+
+async fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
+    let _guard = state.token_refresh_lock.lock().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be after the unix epoch")
+        .as_secs();
+    let device_flow_client = DeviceFlowClient::new(GITHUB_CLIENT_ID.to_string());
+    let token =
+        ensure_valid_access_token(&device_flow_client, state.token_store.as_ref(), now).await?;
+    Ok(GithubClient::new(token))
+}
+
+#[tauri::command]
+async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectListItem>, String> {
+    let client = build_github_client(&state).await?;
+    let repos = client
+        .list_accessible_repos_with_releases()
+        .await
+        .map_err(|e| e.to_string())?;
+    let settings = Settings::load_from(&state.settings_path);
+
+    Ok(repos
+        .into_iter()
+        .map(|repo| {
+            let favorite = settings
+                .projects
+                .get(&repo.full_name)
+                .map(|p| p.favorite)
+                .unwrap_or(false);
+            ProjectListItem {
+                full_name: repo.full_name,
+                owner: repo.owner.login,
+                name: repo.name,
+                favorite,
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn list_releases_for_project(
+    full_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ReleaseSummary>, String> {
+    let (owner, repo) = full_name
+        .split_once('/')
+        .ok_or_else(|| format!("invalid project full_name: {}", full_name))?;
+    let client = build_github_client(&state).await?;
+    client
+        .list_releases(owner, repo)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_favorite(
+    full_name: String,
+    favorite: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_favorite(&full_name, favorite);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_workspace_root(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .workspace_root
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn get_version_label(app: tauri::AppHandle) -> String {
+    version::format_version_label(Channel::current(), &app.package_info().version.to_string())
+}
+
+#[tauri::command]
+fn set_workspace_root(root: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_workspace_root(PathBuf::from(root));
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_bound_projects(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(Settings::load_from(&state.settings_path).bound_projects)
+}
+
+#[tauri::command]
+fn bind_project(full_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.bind_project(&full_name);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn unbind_project(full_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.unbind_project(&full_name);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_theme(state: tauri::State<'_, AppState>) -> Theme {
+    Settings::load_from(&state.settings_path).theme
+}
+
+#[tauri::command]
+fn set_theme(theme: Theme, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_theme(theme);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_selected_release(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .projects
+        .get(&project_key)
+        .and_then(|p| p.selected_release_tag.clone()))
+}
+
+#[tauri::command]
+fn set_selected_release(
+    project_key: String,
+    release_tag: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_selected_release(&project_key, &release_tag);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_ticked_configs(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .projects
+        .get(&project_key)
+        .map(|p| p.ticked_configs.clone())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn set_ticked_configs(
+    project_key: String,
+    configs: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_ticked_configs(&project_key, configs);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_synced_configs(
+    project_key: String,
+    release_tag: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    sync::cache::list_synced_configs(&workspace_root, &project_key, &release_tag)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SyncProgressPayload {
+    project_key: String,
+    downloaded: u64,
+    total: u64,
+}
+
+// Each parameter here is a distinct argument the frontend passes via
+// `invoke`, mirroring the asset/release fields it already has on hand;
+// bundling them into a struct would just move the same field count behind
+// an extra layer without reducing what callers need to supply.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+async fn sync_release_asset(
+    app: tauri::AppHandle,
+    project_key: String,
+    release_tag: String,
+    asset_id: u64,
+    asset_name: String,
+    asset_size: u64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    begin_operation(&state, &project_key)?;
+    let result = sync_release_asset_inner(
+        app,
+        &project_key,
+        &release_tag,
+        asset_id,
+        &asset_name,
+        asset_size,
+        &state,
+    )
+    .await;
+    end_operation(&state, &project_key);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn sync_release_asset_inner(
+    app: tauri::AppHandle,
+    project_key: &str,
+    release_tag: &str,
+    asset_id: u64,
+    asset_name: &str,
+    asset_size: u64,
+    state: &AppState,
+) -> Result<(), String> {
+    let workspace_root = workspace_root_from_settings(state)?;
+
+    let client = build_github_client(state).await?;
+    let (owner, repo) = project_key
+        .split_once('/')
+        .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
+    let download_url = client.asset_download_url(owner, repo, asset_id);
+    let auth_token = client.token();
+
+    let http = reqwest::Client::new();
+    let request = SyncRequest {
+        workspace_root: &workspace_root,
+        project_key,
+        release_tag,
+        asset_id,
+        asset_name,
+        asset_size,
+        download_url: &download_url,
+        auth_token,
+    };
+
+    let project_key_for_events = project_key.to_string();
+    sync_asset(&http, request, move |downloaded, total| {
+        let _ = app.emit(
+            "sync-progress",
+            SyncProgressPayload {
+                project_key: project_key_for_events.clone(),
+                downloaded,
+                total,
+            },
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_project_cache(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    begin_operation(&state, &project_key)?;
+    let result = clear_project_cache_inner(&project_key, &state);
+    end_operation(&state, &project_key);
+    result
+}
+
+// Clears everything this project has on disk: the raw downloaded cache
+// *and* every extracted release/config build under `builds/`. There's no
+// separate "clear builds" affordance, since leaving extracted builds behind
+// after a cache clear would contradict "manually cleared" -- the one button
+// is the manual-clear mechanism for the whole project's disk footprint.
+fn clear_project_cache_inner(project_key: &str, state: &AppState) -> Result<(), String> {
+    let workspace_root = workspace_root_from_settings(state)?;
+
+    let cache = cache_dir(&workspace_root, project_key);
+    if cache.exists() {
+        std::fs::remove_dir_all(&cache).map_err(|e| e.to_string())?;
+    }
+    let builds = builds_root_dir(&workspace_root, project_key);
+    if builds.exists() {
+        std::fs::remove_dir_all(&builds).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_build_executable(
+    project_key: String,
+    release_tag: String,
+    config_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let dir = build_config_dir(&workspace_root, &project_key, &release_tag, &config_name);
+    Ok(find_build_executable(&dir).map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn launch_build(
+    project_key: String,
+    release_tag: String,
+    config_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let dir = build_config_dir(&workspace_root, &project_key, &release_tag, &config_name);
+    let exe = find_build_executable(&dir)
+        .ok_or_else(|| "no executable found in this build".to_string())?;
+    launch_executable(&exe).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_build_dir(
+    project_key: String,
+    release_tag: String,
+    config_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let dir = build_config_dir(&workspace_root, &project_key, &release_tag, &config_name);
+    Ok(dir.exists().then(|| dir.to_string_lossy().to_string()))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let settings_path = settings_path_for(app.handle());
+            app.manage(AppState {
+                token_store: Arc::new(KeyringTokenStore),
+                settings_path,
+                settings_lock: Mutex::new(()),
+                active_operations: Mutex::new(HashSet::new()),
+                token_refresh_lock: tokio::sync::Mutex::new(()),
+            });
+
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            start_background_updates(app.handle().clone());
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            login_start,
+            logout,
+            is_logged_in,
+            list_projects,
+            list_releases_for_project,
+            toggle_favorite,
+            get_workspace_root,
+            set_workspace_root,
+            list_bound_projects,
+            bind_project,
+            unbind_project,
+            get_theme,
+            set_theme,
+            get_selected_release,
+            set_selected_release,
+            get_ticked_configs,
+            set_ticked_configs,
+            list_synced_configs,
+            sync_release_asset,
+            clear_project_cache,
+            get_build_executable,
+            launch_build,
+            get_build_dir,
+            get_version_label
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+- [ ] **Step 2: Verify the crate builds**
+
+Run: `cargo build --manifest-path src-tauri/Cargo.toml`
+Expected: PASS — no compile errors, no unused-import warnings.
+
+- [ ] **Step 3: Run the full backend test suite**
+
+Run: `cargo test --manifest-path src-tauri/Cargo.toml`
+Expected: PASS — every test across `settings::`, `sync::cache::`, `sync::extract::`, `sync::launch::`, `sync::orchestrator::`, `sync::download::` passes.
+
+- [ ] **Step 4: Run clippy (matches CI's `validate` job)**
+
+Run: `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+Expected: PASS — no warnings.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml
+git add src-tauri/src/lib.rs
+git commit -m "Rewrite Tauri command surface for tab binding, theme, and per-config sync"
+```
+
+---
 </content>
