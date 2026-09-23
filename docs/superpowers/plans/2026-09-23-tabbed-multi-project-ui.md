@@ -1920,4 +1920,630 @@ git commit -m "Rewrite Tauri command surface for tab binding, theme, and per-con
 ```
 
 ---
+
+### Task 4: Frontend — API wrapper updates (`api/settings.ts`, `api/sync.ts`)
+
+**Files:**
+- Modify: `src/api/settings.ts` (whole file)
+- Modify: `src/api/sync.ts` (whole file)
+
+No dedicated test files for these — matches this repo's existing convention that `api/*.ts` files (thin `invoke` wrappers) aren't unit tested directly, only exercised indirectly through the component/hook tests that mock them (see e.g. `src/api/version.ts`, which has no `version.test.ts`).
+
+- [ ] **Step 1: Replace `src/api/settings.ts`**
+
+```typescript
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+
+export type Theme = "light" | "dark" | "system";
+
+export function getWorkspaceRoot(): Promise<string | null> {
+  return invoke("get_workspace_root");
+}
+
+export function setWorkspaceRoot(root: string): Promise<void> {
+  return invoke("set_workspace_root", { root });
+}
+
+export function pickFolder(): Promise<string | null> {
+  return open({ directory: true, multiple: false }) as Promise<string | null>;
+}
+
+export function getTheme(): Promise<Theme> {
+  return invoke("get_theme");
+}
+
+export function setTheme(theme: Theme): Promise<void> {
+  return invoke("set_theme", { theme });
+}
+
+export function listBoundProjects(): Promise<string[]> {
+  return invoke("list_bound_projects");
+}
+
+export function bindProject(fullName: string): Promise<void> {
+  return invoke("bind_project", { fullName });
+}
+
+export function unbindProject(fullName: string): Promise<void> {
+  return invoke("unbind_project", { fullName });
+}
+```
+
+- [ ] **Step 2: Replace `src/api/sync.ts`**
+
+```typescript
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { Release, ReleaseAsset } from "./projects";
+
+export type SyncProgress = {
+  project_key: string;
+  downloaded: number;
+  total: number;
+};
+
+export function syncReleaseAsset(
+  projectKey: string,
+  release: Release,
+  asset: ReleaseAsset,
+): Promise<void> {
+  return invoke("sync_release_asset", {
+    projectKey,
+    releaseTag: release.tag_name,
+    assetId: asset.id,
+    assetName: asset.name,
+    assetSize: asset.size,
+  });
+}
+
+export function clearProjectCache(projectKey: string): Promise<void> {
+  return invoke("clear_project_cache", { projectKey });
+}
+
+export function getSelectedRelease(projectKey: string): Promise<string | null> {
+  return invoke("get_selected_release", { projectKey });
+}
+
+export function setSelectedRelease(projectKey: string, releaseTag: string): Promise<void> {
+  return invoke("set_selected_release", { projectKey, releaseTag });
+}
+
+export function getTickedConfigs(projectKey: string): Promise<string[]> {
+  return invoke("get_ticked_configs", { projectKey });
+}
+
+export function setTickedConfigs(projectKey: string, configs: string[]): Promise<void> {
+  return invoke("set_ticked_configs", { projectKey, configs });
+}
+
+export function listSyncedConfigs(projectKey: string, releaseTag: string): Promise<string[]> {
+  return invoke("list_synced_configs", { projectKey, releaseTag });
+}
+
+export function getBuildExecutable(
+  projectKey: string,
+  releaseTag: string,
+  configName: string,
+): Promise<string | null> {
+  return invoke("get_build_executable", { projectKey, releaseTag, configName });
+}
+
+export function launchBuild(
+  projectKey: string,
+  releaseTag: string,
+  configName: string,
+): Promise<void> {
+  return invoke("launch_build", { projectKey, releaseTag, configName });
+}
+
+export function getBuildDir(
+  projectKey: string,
+  releaseTag: string,
+  configName: string,
+): Promise<string | null> {
+  return invoke("get_build_dir", { projectKey, releaseTag, configName });
+}
+
+export function onSyncProgress(callback: (progress: SyncProgress) => void) {
+  return listen<SyncProgress>("sync-progress", (event) => callback(event.payload));
+}
+```
+
+- [ ] **Step 3: Verify the frontend still typechecks**
+
+Run: `npm run build`
+Expected: FAIL at this point — `src/App.tsx`, `src/hooks/useSync.ts`, `src/components/ReleaseList.tsx`, and their tests still reference the removed exports (`checkReleaseAsset`, `getActiveRelease`, `listCachedAssets`, `deleteCachedAsset`, `getActiveExecutable`, `launchActiveBuild`, `getActiveBuildDir`). This is expected and will be resolved as later tasks rewrite those files — do not attempt to fix them here.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/api/settings.ts src/api/sync.ts
+git commit -m "Update API wrappers for tab binding, theme, and per-config sync"
+```
+
+---
+
+### Task 5: Frontend — theming (`useTheme` hook + `ThemeToggle` component)
+
+**Files:**
+- Modify: `src/test-setup.ts`
+- Create: `src/hooks/useTheme.ts`
+- Create: `src/hooks/useTheme.test.ts`
+- Create: `src/components/ThemeToggle.tsx`
+- Create: `src/components/ThemeToggle.test.tsx`
+
+- [ ] **Step 1: Reset the theme attribute between tests**
+
+`useTheme` sets a `data-theme` attribute directly on `document.documentElement`, which lives outside the React tree `@testing-library/react`'s `cleanup()` unmounts — without resetting it, one test's theme choice would leak into the next. Update `src/test-setup.ts`:
+
+```typescript
+import "@testing-library/jest-dom/vitest";
+import { afterEach } from "vitest";
+import { cleanup } from "@testing-library/react";
+
+// @testing-library/react's auto-cleanup relies on a global `afterEach`,
+// which vitest does not inject unless `test.globals: true` is set. Register
+// it explicitly so component trees are unmounted between tests.
+afterEach(() => {
+  cleanup();
+  // useTheme sets this directly on <html>, outside the React tree cleanup()
+  // unmounts -- reset it so one test's theme choice can't leak into the next.
+  document.documentElement.removeAttribute("data-theme");
+});
+```
+
+- [ ] **Step 2: Write the failing test for `useTheme`**
+
+Create `src/hooks/useTheme.test.ts`:
+
+```typescript
+import { describe, expect, it, vi } from "vitest";
+import { renderHook, waitFor, act } from "@testing-library/react";
+import { useTheme } from "./useTheme";
+import * as settingsApi from "../api/settings";
+
+vi.mock("../api/settings");
+
+describe("useTheme", () => {
+  it("loads the persisted theme on mount and applies it to the root element", async () => {
+    vi.mocked(settingsApi.getTheme).mockResolvedValue("dark");
+
+    const { result } = renderHook(() => useTheme());
+
+    await waitFor(() => expect(result.current.theme).toBe("dark"));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  it("removes the data-theme attribute for system so the media query decides", async () => {
+    vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+    document.documentElement.setAttribute("data-theme", "dark");
+
+    renderHook(() => useTheme());
+
+    await waitFor(() =>
+      expect(document.documentElement.hasAttribute("data-theme")).toBe(false),
+    );
+  });
+
+  it("persists and applies a new theme when setTheme is called", async () => {
+    vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+    vi.mocked(settingsApi.setTheme).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useTheme());
+    await waitFor(() => expect(result.current.theme).toBe("system"));
+
+    act(() => {
+      result.current.setTheme("light");
+    });
+
+    expect(result.current.theme).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(settingsApi.setTheme).toHaveBeenCalledWith("light");
+  });
+});
+```
+
+- [ ] **Step 3: Run the test to verify it fails**
+
+Run: `npm run test -- useTheme.test.ts`
+Expected: FAIL — `src/hooks/useTheme.ts` does not exist yet.
+
+- [ ] **Step 4: Write the minimal implementation**
+
+Create `src/hooks/useTheme.ts`:
+
+```typescript
+import { useEffect, useState } from "react";
+import { getTheme, setTheme as persistTheme, type Theme } from "../api/settings";
+
+export type { Theme };
+
+/** Loads the persisted theme on mount, applies it to <html data-theme>, and
+ * persists any change the caller makes via the returned setter. "system"
+ * removes the attribute entirely so `@media (prefers-color-scheme)` decides. */
+export function useTheme() {
+  const [theme, setThemeState] = useState<Theme>("system");
+
+  useEffect(() => {
+    getTheme()
+      .then(setThemeState)
+      .catch((error) => console.error("failed to load theme", error));
+  }, []);
+
+  useEffect(() => {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+  }, [theme]);
+
+  const setTheme = (next: Theme) => {
+    setThemeState(next);
+    persistTheme(next).catch((error) => console.error("failed to save theme", error));
+  };
+
+  return { theme, setTheme };
+}
+```
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+Run: `npm run test -- useTheme.test.ts`
+Expected: PASS.
+
+- [ ] **Step 6: Write the failing test for `ThemeToggle`**
+
+Create `src/components/ThemeToggle.test.tsx`:
+
+```tsx
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { ThemeToggle } from "./ThemeToggle";
+
+describe("ThemeToggle", () => {
+  it("renders a button for each theme option", () => {
+    render(<ThemeToggle theme="system" onChange={() => {}} />);
+
+    expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "System" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dark" })).toBeInTheDocument();
+  });
+
+  it("marks the current theme's button as pressed", () => {
+    render(<ThemeToggle theme="dark" onChange={() => {}} />);
+
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("calls onChange with the clicked theme", () => {
+    const onChange = vi.fn();
+    render(<ThemeToggle theme="system" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+
+    expect(onChange).toHaveBeenCalledWith("dark");
+  });
+});
+```
+
+- [ ] **Step 7: Run the test to verify it fails**
+
+Run: `npm run test -- ThemeToggle.test.tsx`
+Expected: FAIL — `src/components/ThemeToggle.tsx` does not exist yet.
+
+- [ ] **Step 8: Write the minimal implementation**
+
+Create `src/components/ThemeToggle.tsx`:
+
+```tsx
+import type { Theme } from "../hooks/useTheme";
+
+type Props = {
+  theme: Theme;
+  onChange: (theme: Theme) => void;
+};
+
+const OPTIONS: { value: Theme; label: string; icon: string }[] = [
+  { value: "light", label: "Light", icon: "☀" },
+  { value: "system", label: "System", icon: "🖥" },
+  { value: "dark", label: "Dark", icon: "🌙" },
+];
+
+export function ThemeToggle({ theme, onChange }: Props) {
+  return (
+    <div className="theme-toggle" role="group" aria-label="Theme">
+      {OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          aria-label={option.label}
+          aria-pressed={theme === option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 9: Run the test to verify it passes**
+
+Run: `npm run test -- ThemeToggle.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/test-setup.ts src/hooks/useTheme.ts src/hooks/useTheme.test.ts src/components/ThemeToggle.tsx src/components/ThemeToggle.test.tsx
+git commit -m "Add useTheme hook and ThemeToggle component"
+```
+
+---
+
+### Task 6: Frontend — rewrite `useSync` for sequential multi-config sync
+
+**Files:**
+- Modify: `src/hooks/useSync.ts` (whole file)
+- Modify: `src/hooks/useSync.test.ts` (whole file)
+
+The old hook exposed `sync(release, asset)` (download + activate one asset) and `check(asset)` (download only, never activate). Neither concept survives: there's no more "activate," and there's no more "download without extracting" path (see Task 2/3's removal of `check_release_asset`/`ensure_asset_cached`). The new hook exposes a single `syncConfigs(release, assets)` that syncs a list of assets one at a time, reporting which one is currently in flight.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace all of `src/hooks/useSync.test.ts` with:
+
+```typescript
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { useSync } from "./useSync";
+import * as syncApi from "../api/sync";
+import type { Release, ReleaseAsset } from "../api/projects";
+
+vi.mock("../api/sync");
+
+const release: Release = {
+  id: 1,
+  tag_name: "0.2.14",
+  name: "0.2.14",
+  prerelease: false,
+  published_at: null,
+  assets: [],
+};
+const shippingAsset: ReleaseAsset = {
+  id: 10,
+  name: "shipping.zip",
+  size: 1000,
+  browser_download_url: "https://example.com/shipping.zip",
+};
+const testAsset: ReleaseAsset = {
+  id: 11,
+  name: "test.zip",
+  size: 500,
+  browser_download_url: "https://example.com/test.zip",
+};
+
+describe("useSync", () => {
+  beforeEach(() => {
+    vi.mocked(syncApi.onSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
+  });
+
+  it("syncs a single asset and transitions to done", async () => {
+    vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    let succeeded: boolean | undefined;
+    await act(async () => {
+      succeeded = await result.current.syncConfigs(release, [shippingAsset]);
+    });
+
+    expect(succeeded).toBe(true);
+    expect(result.current.state).toEqual({ phase: "done" });
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledWith("org/repo", release, shippingAsset);
+  });
+
+  it("syncs multiple assets one at a time, in order", async () => {
+    const callOrder: string[] = [];
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(async (_projectKey, _release, asset) => {
+      callOrder.push(asset.name);
+    });
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    await act(async () => {
+      await result.current.syncConfigs(release, [shippingAsset, testAsset]);
+    });
+
+    expect(callOrder).toEqual(["shipping.zip", "test.zip"]);
+  });
+
+  it("reports which config is currently syncing", async () => {
+    let resolveShipping: () => void = () => {};
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(
+      () => new Promise((resolve) => (resolveShipping = () => resolve(undefined))),
+    );
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    act(() => {
+      result.current.syncConfigs(release, [shippingAsset]);
+    });
+
+    expect(result.current.state).toEqual({
+      phase: "syncing",
+      configName: "shipping.zip",
+      downloaded: 0,
+      total: 1000,
+    });
+
+    await act(async () => resolveShipping());
+  });
+
+  it("updates progress only for matching project_key events", async () => {
+    let capturedCallback: (progress: syncApi.SyncProgress) => void = () => {};
+    vi.mocked(syncApi.onSyncProgress).mockImplementation((cb) => {
+      capturedCallback = cb;
+      return Promise.resolve(() => {});
+    });
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(() => new Promise(() => {}));
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    act(() => {
+      result.current.syncConfigs(release, [shippingAsset]);
+    });
+    act(() => {
+      capturedCallback({ project_key: "org/other-repo", downloaded: 5, total: 1000 });
+    });
+    expect(result.current.state).toMatchObject({ downloaded: 0, total: 1000 });
+
+    act(() => {
+      capturedCallback({ project_key: "org/repo", downloaded: 500, total: 1000 });
+    });
+    await waitFor(() =>
+      expect(result.current.state).toMatchObject({ downloaded: 500, total: 1000 }),
+    );
+  });
+
+  it("transitions to error and rethrows when a sync call rejects, without syncing the rest of the batch", async () => {
+    vi.mocked(syncApi.syncReleaseAsset).mockRejectedValue(new Error("network down"));
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    await act(async () => {
+      await expect(result.current.syncConfigs(release, [shippingAsset, testAsset])).rejects.toThrow(
+        "network down",
+      );
+    });
+
+    expect(result.current.state).toEqual({ phase: "error", message: "Error: network down" });
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a second syncConfigs() call while one is already in flight, resolving it to false", async () => {
+    let resolveFirstSync: () => void = () => {};
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(
+      () => new Promise((resolve) => (resolveFirstSync = () => resolve(undefined))),
+    );
+    const { result } = renderHook(() => useSync("org/repo"));
+
+    let firstCall!: Promise<boolean>;
+    let secondCall!: Promise<boolean>;
+    act(() => {
+      firstCall = result.current.syncConfigs(release, [shippingAsset]);
+    });
+    act(() => {
+      secondCall = result.current.syncConfigs(release, [testAsset]);
+    });
+
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1);
+    await expect(secondCall).resolves.toBe(false);
+
+    await act(async () => resolveFirstSync());
+
+    await expect(firstCall).resolves.toBe(true);
+    expect(result.current.state).toEqual({ phase: "done" });
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npm run test -- useSync.test.ts`
+Expected: FAIL — `result.current.syncConfigs` is not a function (the hook still only exposes `sync`/`check`).
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Replace all of `src/hooks/useSync.ts` with:
+
+```typescript
+import { useCallback, useEffect, useRef, useState } from "react";
+import { onSyncProgress, syncReleaseAsset } from "../api/sync";
+import type { Release, ReleaseAsset } from "../api/projects";
+
+export type SyncState =
+  | { phase: "idle" }
+  | { phase: "syncing"; configName: string; downloaded: number; total: number }
+  | { phase: "done" }
+  | { phase: "error"; message: string };
+
+/** Syncs (downloads + extracts) one or more build configs of a release, one
+ * at a time, reporting progress for whichever config is currently
+ * downloading. Guards against overlapping calls the same way the previous
+ * single-asset version did. */
+export function useSync(projectKey: string) {
+  const [state, setState] = useState<SyncState>({ phase: "idle" });
+  const inFlightRef = useRef(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    onSyncProgress((progress) => {
+      if (progress.project_key !== projectKey) {
+        return;
+      }
+      setState((prev) =>
+        prev.phase === "syncing"
+          ? { ...prev, downloaded: progress.downloaded, total: progress.total }
+          : prev,
+      );
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [projectKey]);
+
+  // Runs sync for every asset in sequence, guarding against overlapping
+  // calls. Returns true if every asset synced successfully, false if it was
+  // skipped because another sync was already in flight, and rethrows (after
+  // recording the error state) on the first failure, stopping the batch --
+  // so the caller never mistakes a partially-synced batch for a fully
+  // completed one.
+  const syncConfigs = useCallback(
+    async (release: Release, assets: ReleaseAsset[]) => {
+      if (inFlightRef.current) {
+        return false;
+      }
+      inFlightRef.current = true;
+      try {
+        for (const asset of assets) {
+          setState({ phase: "syncing", configName: asset.name, downloaded: 0, total: asset.size });
+          await syncReleaseAsset(projectKey, release, asset);
+        }
+        setState({ phase: "done" });
+        return true;
+      } catch (error) {
+        setState({ phase: "error", message: String(error) });
+        throw error;
+      } finally {
+        inFlightRef.current = false;
+      }
+    },
+    [projectKey],
+  );
+
+  return { state, syncConfigs };
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npm run test -- useSync.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/hooks/useSync.ts src/hooks/useSync.test.ts
+git commit -m "Rewrite useSync to sync multiple build configs sequentially"
+```
+
+---
 </content>
