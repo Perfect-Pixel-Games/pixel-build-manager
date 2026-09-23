@@ -49,6 +49,9 @@ pub fn builds_root_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
 /// already used unsanitized as filenames in `cached_asset_path` below, since
 /// GitHub-uploaded asset names can't contain path separators.
 fn sanitize_path_component(value: &str) -> String {
+    if value == "." || value == ".." {
+        return "_".to_string();
+    }
     value
         .chars()
         .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
@@ -187,6 +190,18 @@ mod tests {
         assert_eq!(
             dir,
             PathBuf::from("D:\\Builds\\org\\repo\\builds\\release_1.2.3\\shipping.zip")
+        );
+    }
+
+    #[test]
+    fn build_config_dir_sanitizes_a_release_tag_that_is_exactly_dot_dot() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "..", "shipping.zip");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\_\\shipping.zip")
         );
     }
 
