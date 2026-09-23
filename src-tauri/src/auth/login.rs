@@ -1,7 +1,15 @@
 use crate::auth::device_flow::{AuthError, DeviceFlowClient, PollOutcome};
+use crate::auth::session::{save_stored_token, StoredToken};
 use crate::auth::token_store::TokenStore;
 use serde::Serialize;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after the unix epoch")
+        .as_secs()
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -44,8 +52,9 @@ pub async fn perform_device_login<F: Fn(LoginStatus)>(
         tokio::time::sleep(interval).await;
 
         match client.poll_for_token(&device_code.device_code).await {
-            Ok(PollOutcome::AccessToken(token)) => {
-                if let Err(e) = token_store.save(&token) {
+            Ok(PollOutcome::AccessToken(response)) => {
+                let stored = StoredToken::from_response(response, now_secs());
+                if let Err(e) = save_stored_token(token_store, &stored) {
                     let err = AuthError::UnexpectedResponse(e);
                     on_status(LoginStatus::Error {
                         error: err.to_string(),
@@ -145,7 +154,10 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/login/oauth/access_token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "ghu_token"
+                "access_token": "ghu_token",
+                "refresh_token": "ghr_token",
+                "expires_in": 28800,
+                "refresh_token_expires_in": 15811200
             })))
             .mount(&server)
             .await;
@@ -161,7 +173,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(token_store.load().unwrap(), Some("ghu_token".to_string()));
+        let raw = token_store.load().unwrap().unwrap();
+        let stored: StoredToken = serde_json::from_str(&raw).unwrap();
+        assert_eq!(stored.access_token, "ghu_token");
+        assert_eq!(stored.refresh_token, "ghr_token");
         let recorded = statuses.lock().unwrap();
         assert_eq!(
             recorded[0],
@@ -255,7 +270,10 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/login/oauth/access_token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "ghu_token"
+                "access_token": "ghu_token",
+                "refresh_token": "ghr_token",
+                "expires_in": 28800,
+                "refresh_token_expires_in": 15811200
             })))
             .mount(&server)
             .await;
