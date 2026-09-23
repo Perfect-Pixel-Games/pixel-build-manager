@@ -8,11 +8,6 @@ export type SyncProgress = {
   total: number;
 };
 
-export type ActiveRelease = {
-  release_tag: string | null;
-  asset_name: string | null;
-};
-
 export function syncReleaseAsset(
   projectKey: string,
   release: Release,
@@ -27,45 +22,52 @@ export function syncReleaseAsset(
   });
 }
 
-export function checkReleaseAsset(projectKey: string, asset: ReleaseAsset): Promise<void> {
-  return invoke("check_release_asset", {
-    projectKey,
-    assetId: asset.id,
-    assetName: asset.name,
-    assetSize: asset.size,
-  });
-}
-
-export function getActiveRelease(projectKey: string): Promise<ActiveRelease> {
-  return invoke("get_active_release", { projectKey });
-}
-
 export function clearProjectCache(projectKey: string): Promise<void> {
   return invoke("clear_project_cache", { projectKey });
 }
 
-export function listCachedAssets(projectKey: string): Promise<number[]> {
-  return invoke("list_cached_assets", { projectKey });
+export function getSelectedRelease(projectKey: string): Promise<string | null> {
+  return invoke("get_selected_release", { projectKey });
 }
 
-export function deleteCachedAsset(
+export function setSelectedRelease(projectKey: string, releaseTag: string): Promise<void> {
+  return invoke("set_selected_release", { projectKey, releaseTag });
+}
+
+export function getTickedConfigs(projectKey: string): Promise<string[]> {
+  return invoke("get_ticked_configs", { projectKey });
+}
+
+export function setTickedConfigs(projectKey: string, configs: string[]): Promise<void> {
+  return invoke("set_ticked_configs", { projectKey, configs });
+}
+
+export function listSyncedConfigs(projectKey: string, releaseTag: string): Promise<string[]> {
+  return invoke("list_synced_configs", { projectKey, releaseTag });
+}
+
+export function getBuildExecutable(
   projectKey: string,
-  assetId: number,
-  assetName: string,
+  releaseTag: string,
+  configName: string,
+): Promise<string | null> {
+  return invoke("get_build_executable", { projectKey, releaseTag, configName });
+}
+
+export function launchBuild(
+  projectKey: string,
+  releaseTag: string,
+  configName: string,
 ): Promise<void> {
-  return invoke("delete_cached_asset", { projectKey, assetId, assetName });
+  return invoke("launch_build", { projectKey, releaseTag, configName });
 }
 
-export function getActiveExecutable(projectKey: string): Promise<string | null> {
-  return invoke("get_active_executable", { projectKey });
-}
-
-export function launchActiveBuild(projectKey: string): Promise<void> {
-  return invoke("launch_active_build", { projectKey });
-}
-
-export function getActiveBuildDir(projectKey: string): Promise<string | null> {
-  return invoke("get_active_build_dir", { projectKey });
+export function getBuildDir(
+  projectKey: string,
+  releaseTag: string,
+  configName: string,
+): Promise<string | null> {
+  return invoke("get_build_dir", { projectKey, releaseTag, configName });
 }
 
 export function onSyncProgress(callback: (progress: SyncProgress) => void) {
