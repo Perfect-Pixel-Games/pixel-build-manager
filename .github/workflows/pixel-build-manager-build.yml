@@ -159,6 +159,20 @@ jobs:
           $config.version = "${{ needs.compute-version.outputs.tag }}"
           $config | ConvertTo-Json -Depth 32 | Set-Content $configPath
 
+      # CARGO_TARGET_DIR is a fixed path that persists across runs on this
+      # self-hosted runner. Tauri's bundler never clears its output dir, it
+      # just adds the newly-versioned installer alongside whatever old ones
+      # are already there -- so without this, every release ends up
+      # including every previous version's installer too, and the "pick the
+      # sig file" step below can grab a stale one.
+      - name: Clean previous bundle output
+        shell: powershell
+        run: |
+          $bundleDir = "$env:CARGO_TARGET_DIR\release\bundle"
+          if (Test-Path $bundleDir) {
+            Remove-Item -Recurse -Force $bundleDir
+          }
+
       - name: Build Tauri app (NSIS)
         shell: cmd
         env:
@@ -214,13 +228,21 @@ jobs:
       - name: Generate latest.json update manifest
         shell: powershell
         run: |
-          $sigFile = Get-ChildItem -Path artifacts/release-downloads -Recurse -Filter "*-setup.exe.sig" | Select-Object -First 1
+          $tag = "${{ needs.compute-version.outputs.tag }}"
+          # Match on the tag explicitly rather than taking "the first .sig
+          # found" -- if a stale installer from a previous version ever
+          # ends up alongside the current one, an unordered pick could bind
+          # this release's manifest to the WRONG binary while still
+          # claiming this version number, sending every installed app into
+          # an endless "update" loop that never actually updates.
+          $sigFile = Get-ChildItem -Path artifacts/release-downloads -Recurse -Filter "*-setup.exe.sig" |
+            Where-Object { $_.Name -like "*_${tag}_*" } |
+            Select-Object -First 1
           if (-not $sigFile) {
-            throw "no NSIS .sig file found under artifacts/release-downloads -- was createUpdaterArtifacts enabled and signing secrets set?"
+            throw "no NSIS .sig file matching version $tag found under artifacts/release-downloads -- was createUpdaterArtifacts enabled and signing secrets set?"
           }
           $signature = (Get-Content $sigFile.FullName -Raw).Trim()
           $installerName = $sigFile.Name -replace '\.sig$', ''
-          $tag = "${{ needs.compute-version.outputs.tag }}"
           $manifest = @{
             version = $tag
             pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
