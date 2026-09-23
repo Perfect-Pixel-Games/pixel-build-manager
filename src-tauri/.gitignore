@@ -7,5 +7,8 @@
 /gen/schemas
 
 # Updater signing keys -- never commit these, they're stored as GitHub
-# Actions secrets (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) instead.
+# Actions secrets (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) instead. Covers
+# both the private key (*.key) and the public key file the CLI writes
+# alongside it (*.key.pub).
 *.key
+*.key.pub
