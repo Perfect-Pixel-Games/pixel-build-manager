@@ -1,6 +1,6 @@
-use crate::sync::cache::{active_dir, cache_dir, cached_asset_path};
+use crate::sync::cache::{build_config_dir, cache_dir, cached_asset_path};
 use crate::sync::download::{download_with_progress, DownloadError};
-use crate::sync::extract::{extract_to_active, ExtractError};
+use crate::sync::extract::{extract_archive, ExtractError};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -16,6 +16,7 @@ pub enum SyncError {
 pub struct SyncRequest<'a> {
     pub workspace_root: &'a Path,
     pub project_key: &'a str,
+    pub release_tag: &'a str,
     pub asset_id: u64,
     pub asset_name: &'a str,
     pub asset_size: u64,
@@ -25,9 +26,7 @@ pub struct SyncRequest<'a> {
 
 /// Ensures a valid copy of the requested asset is present in the project's
 /// cache dir, downloading (or re-downloading, if the existing copy's size
-/// doesn't match) as needed. Does not touch the active build in any way --
-/// this is the "Check"/"Sync" button's action, distinct from actually
-/// activating a build.
+/// doesn't match) as needed.
 async fn ensure_cached_copy<F: FnMut(u64, u64)>(
     http: &reqwest::Client,
     request: &SyncRequest<'_>,
@@ -60,18 +59,14 @@ async fn ensure_cached_copy<F: FnMut(u64, u64)>(
     Ok(cached_path)
 }
 
-/// Downloads/verifies the asset into the cache without activating it.
-pub async fn ensure_asset_cached<F: FnMut(u64, u64)>(
-    http: &reqwest::Client,
-    request: SyncRequest<'_>,
-    on_progress: F,
-) -> Result<(), SyncError> {
-    ensure_cached_copy(http, &request, on_progress).await?;
-    Ok(())
-}
-
-/// Downloads/verifies the asset (as `ensure_asset_cached` does) and then
-/// extracts it into the active build dir, making it the active build.
+/// Downloads/verifies the asset (if needed) and (re-)extracts it into its
+/// own `builds/<release_tag>/<config_name>/` folder, keyed by release and
+/// build config so multiple configs -- even across different releases --
+/// can be extracted and coexist on disk at once. Always re-extracts even
+/// when the cached copy was already valid, which is what makes this safe to
+/// call both for "sync what's missing" and "re-verify/repair" alike: the
+/// frontend decides which of those two it wants purely by choosing which
+/// assets to pass in, not by passing a different flag here.
 pub async fn sync_asset<F: FnMut(u64, u64)>(
     http: &reqwest::Client,
     request: SyncRequest<'_>,
@@ -79,8 +74,13 @@ pub async fn sync_asset<F: FnMut(u64, u64)>(
 ) -> Result<(), SyncError> {
     let cached_path = ensure_cached_copy(http, &request, on_progress).await?;
 
-    let active = active_dir(request.workspace_root, request.project_key);
-    extract_to_active(&cached_path, &active)?;
+    let target = build_config_dir(
+        request.workspace_root,
+        request.project_key,
+        request.release_tag,
+        request.asset_name,
+    );
+    extract_archive(&cached_path, &target)?;
 
     Ok(())
 }
@@ -128,6 +128,7 @@ mod tests {
         let request = || SyncRequest {
             workspace_root: workspace.path(),
             project_key: "org/repo",
+            release_tag: "0.2.14",
             asset_id: 1,
             asset_name: "asset.zip",
             asset_size: zip_len,
@@ -137,9 +138,9 @@ mod tests {
 
         sync_asset(&http, request(), |_, _| {}).await.unwrap();
 
-        let active = active_dir(workspace.path(), "org/repo");
+        let target = build_config_dir(workspace.path(), "org/repo", "0.2.14", "asset.zip");
         assert_eq!(
-            std::fs::read_to_string(active.join("game.exe")).unwrap(),
+            std::fs::read_to_string(target.join("game.exe")).unwrap(),
             "binary-contents"
         );
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
@@ -175,6 +176,7 @@ mod tests {
         let request = SyncRequest {
             workspace_root: workspace.path(),
             project_key: "org/repo",
+            release_tag: "0.2.14",
             asset_id: 1,
             asset_name: "asset.zip",
             asset_size: zip_len,
@@ -195,62 +197,63 @@ mod tests {
             1,
             "a cached copy whose size doesn't match the expected asset size must be re-downloaded"
         );
-        let active = active_dir(workspace.path(), "org/repo");
+        let target = build_config_dir(workspace.path(), "org/repo", "0.2.14", "asset.zip");
         assert_eq!(
-            std::fs::read_to_string(active.join("game.exe")).unwrap(),
+            std::fs::read_to_string(target.join("game.exe")).unwrap(),
             "binary-contents"
         );
     }
 
     #[tokio::test]
-    async fn ensure_asset_cached_downloads_but_never_activates_the_build() {
+    async fn two_different_configs_of_the_same_release_coexist_on_disk() {
         let zip_bytes = build_test_zip_bytes();
         let server = MockServer::start().await;
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = call_count.clone();
         Mock::given(method("GET"))
-            .and(path("/asset.zip"))
-            .respond_with(move |_: &wiremock::Request| {
-                call_count_clone.fetch_add(1, Ordering::SeqCst);
-                ResponseTemplate::new(200).set_body_bytes(zip_bytes.clone())
-            })
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(zip_bytes.clone()))
             .mount(&server)
             .await;
 
         let workspace = tempfile::tempdir().unwrap();
         let http = reqwest::Client::new();
-        let zip_len = build_test_zip_bytes().len() as u64;
-        let download_url = format!("{}/asset.zip", server.uri());
-        let request = || SyncRequest {
+        let zip_len = zip_bytes.len() as u64;
+
+        let shipping_request = SyncRequest {
             workspace_root: workspace.path(),
             project_key: "org/repo",
+            release_tag: "0.2.14",
             asset_id: 1,
-            asset_name: "asset.zip",
+            asset_name: "shipping.zip",
             asset_size: zip_len,
-            download_url: &download_url,
+            download_url: &format!("{}/shipping.zip", server.uri()),
+            auth_token: "test-token",
+        };
+        let test_request = SyncRequest {
+            workspace_root: workspace.path(),
+            project_key: "org/repo",
+            release_tag: "0.2.14",
+            asset_id: 2,
+            asset_name: "test.zip",
+            asset_size: zip_len,
+            download_url: &format!("{}/test.zip", server.uri()),
             auth_token: "test-token",
         };
 
-        ensure_asset_cached(&http, request(), |_, _| {})
+        sync_asset(&http, shipping_request, |_, _| {})
             .await
             .unwrap();
+        sync_asset(&http, test_request, |_, _| {}).await.unwrap();
 
-        let cached_path = cached_asset_path(workspace.path(), "org/repo", 1, "asset.zip");
         assert!(
-            cached_path.exists(),
-            "the asset must be downloaded into the cache"
+            build_config_dir(workspace.path(), "org/repo", "0.2.14", "shipping.zip")
+                .join("game.exe")
+                .exists()
         );
         assert!(
-            !active_dir(workspace.path(), "org/repo").exists(),
-            "checking/downloading an asset must not create or populate the active dir"
+            build_config_dir(workspace.path(), "org/repo", "0.2.14", "test.zip")
+                .join("game.exe")
+                .exists(),
+            "syncing a second config must not remove the first config's extracted folder"
         );
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-
-        // A second check of an already-valid cached copy must not re-download.
-        ensure_asset_cached(&http, request(), |_, _| {})
-            .await
-            .unwrap();
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     fn build_test_tar_gz_bytes() -> Vec<u8> {
@@ -288,6 +291,7 @@ mod tests {
         let request = SyncRequest {
             workspace_root: workspace.path(),
             project_key: "org/repo",
+            release_tag: "0.2.14",
             asset_id: 1,
             asset_name: "asset.tar.gz",
             asset_size: tar_gz_bytes.len() as u64,
@@ -297,9 +301,9 @@ mod tests {
 
         sync_asset(&http, request, |_, _| {}).await.unwrap();
 
-        let active = active_dir(workspace.path(), "org/repo");
+        let target = build_config_dir(workspace.path(), "org/repo", "0.2.14", "asset.tar.gz");
         assert_eq!(
-            std::fs::read_to_string(active.join("game.exe")).unwrap(),
+            std::fs::read_to_string(target.join("game.exe")).unwrap(),
             "binary-contents"
         );
     }
