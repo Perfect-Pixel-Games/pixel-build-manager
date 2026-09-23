@@ -4108,4 +4108,680 @@ git commit -m "Remove ProjectList and ReleaseList, superseded by TabBar/BindProj
 (`npm run test` will still show failures at this point, since `App.tsx` and `App.test.tsx` haven't been updated yet — that's Task 15, next.)
 
 ---
+
+### Task 15: Frontend — wire everything together in `App.tsx` + `App.css`
+
+**Files:**
+- Modify: `src/App.tsx` (whole file)
+- Modify: `src/App.test.tsx` (whole file)
+- Modify: `src/App.css` (whole file — replaces the leftover Vite/Tauri template rules, which nothing in `App.tsx` has ever referenced via `className`, with the real theme/tab-bar/footer styles)
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace all of `src/App.test.tsx` with:
+
+```tsx
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import App, { ProjectDetail } from "./App";
+import * as projectsApi from "./api/projects";
+import * as syncApi from "./api/sync";
+import * as authApi from "./api/auth";
+import { SESSION_EXPIRED_ERROR } from "./api/auth";
+import * as versionApi from "./api/version";
+import * as settingsApi from "./api/settings";
+import type { Release } from "./api/projects";
+
+vi.mock("./api/projects");
+vi.mock("./api/sync");
+vi.mock("./api/auth");
+vi.mock("./api/version");
+vi.mock("./api/settings");
+
+const release: Release = {
+  id: 1,
+  tag_name: "0.2.14",
+  name: "LastBeacon 0.2.14",
+  prerelease: false,
+  published_at: null,
+  assets: [
+    { id: 10, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/a" },
+    { id: 11, name: "test.zip", size: 100, browser_download_url: "https://example.com/b" },
+  ],
+};
+
+function mockProjectDetailBaseline() {
+  vi.mocked(projectsApi.listReleasesForProject).mockResolvedValue([release]);
+  vi.mocked(syncApi.getSelectedRelease).mockResolvedValue(null);
+  vi.mocked(syncApi.setSelectedRelease).mockResolvedValue(undefined);
+  vi.mocked(syncApi.getTickedConfigs).mockResolvedValue([]);
+  vi.mocked(syncApi.setTickedConfigs).mockResolvedValue(undefined);
+  vi.mocked(syncApi.listSyncedConfigs).mockResolvedValue([]);
+  vi.mocked(syncApi.onSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
+  vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
+}
+
+function mockAppShellBaseline() {
+  vi.mocked(authApi.isLoggedIn).mockResolvedValue(true);
+  vi.mocked(authApi.onLoginStatus).mockResolvedValue(() => {});
+  vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
+  vi.mocked(settingsApi.getWorkspaceRoot).mockResolvedValue("D:\\Builds");
+  vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+}
+
+describe("ProjectDetail", () => {
+  it("loads the persisted selected release and ticked configs, then renders them", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSelectedRelease).mockResolvedValue("0.2.14");
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+
+    render(<ProjectDetail projectKey="org/repo" />);
+
+    expect(await screen.findByRole("button", { name: "LastBeacon 0.2.14" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(await screen.findByLabelText("shipping.zip")).toBeChecked();
+  });
+
+  it("persists the selected release when a release row is clicked", async () => {
+    mockProjectDetailBaseline();
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "LastBeacon 0.2.14" }));
+
+    await waitFor(() => expect(syncApi.setSelectedRelease).toHaveBeenCalledWith("org/repo", "0.2.14"));
+  });
+
+  it("persists ticked configs and syncs only the missing ticked assets when Sync is clicked", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSelectedRelease).mockResolvedValue("0.2.14");
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByLabelText("shipping.zip"));
+
+    await waitFor(() => expect(syncApi.setTickedConfigs).toHaveBeenCalledWith("org/repo", ["shipping.zip"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+
+    await waitFor(() => expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1));
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledWith("org/repo", release, release.assets[0]);
+  });
+
+  it("shows the busy overlay while a sync is in flight", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSelectedRelease).mockResolvedValue("0.2.14");
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(() => new Promise(() => {}));
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+  });
+});
+
+describe("App", () => {
+  it("shows the version label in the footer even before logging in", async () => {
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+    vi.mocked(authApi.onLoginStatus).mockResolvedValue(() => {});
+    vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
+
+    render(<App />);
+
+    expect(await screen.findByText("Release 0.4.0")).toBeInTheDocument();
+  });
+
+  it("routes back to the Login screen when loading projects reports the session has expired", async () => {
+    mockAppShellBaseline();
+    vi.mocked(projectsApi.listProjects).mockRejectedValue(SESSION_EXPIRED_ERROR);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: /log in with github/i })).toBeInTheDocument();
+  });
+
+  it("shows only a + button when no projects are bound", async () => {
+    mockAppShellBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("binding a project via the popup opens its tab", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.bindProject).mockResolvedValue(undefined);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind a project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "repo" }));
+
+    await waitFor(() => expect(settingsApi.bindProject).toHaveBeenCalledWith("org/repo"));
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("repo");
+  });
+
+  it("closing a tab's x unbinds the project", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/repo"]);
+    vi.mocked(settingsApi.unbindProject).mockResolvedValue(undefined);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Close repo" }));
+
+    await waitFor(() => expect(settingsApi.unbindProject).toHaveBeenCalledWith("org/repo"));
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npm run test -- App.test.tsx`
+Expected: FAIL — `App.tsx` still imports the just-deleted `ProjectList`/`ReleaseList` and the removed `api/sync` exports, so this fails to even compile/run yet.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Replace all of `src/App.tsx` with:
+
+```tsx
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
+import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
+import { bindProject, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
+import {
+  getSelectedRelease,
+  getTickedConfigs,
+  listSyncedConfigs,
+  setSelectedRelease,
+  setTickedConfigs,
+} from "./api/sync";
+import { getVersionLabel } from "./api/version";
+import { BindProjectPopup } from "./components/BindProjectPopup";
+import { BuildBrowser } from "./components/BuildBrowser";
+import { BusyOverlay } from "./components/BusyOverlay";
+import { ClearCacheButton } from "./components/ClearCacheButton";
+import { Login } from "./components/Login";
+import { SyncedBuildControls } from "./components/SyncedBuildControls";
+import { SyncStatus } from "./components/SyncStatus";
+import { TabBar } from "./components/TabBar";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { WorkspaceSetup } from "./components/WorkspaceSetup";
+import { useSync } from "./hooks/useSync";
+import { useTheme } from "./hooks/useTheme";
+import "./App.css";
+
+export function ProjectDetail({ projectKey }: { projectKey: string }) {
+  const [releases, setReleases] = useState<Release[]>([]);
+  const [selectedReleaseTag, setSelectedReleaseTagState] = useState<string | null>(null);
+  const [tickedConfigs, setTickedConfigsState] = useState<string[]>([]);
+  const [syncedConfigs, setSyncedConfigs] = useState<string[]>([]);
+  const { state, syncConfigs } = useSync(projectKey);
+
+  useEffect(() => {
+    listReleasesForProject(projectKey)
+      .then(setReleases)
+      .catch((error) => console.error("failed to load releases", error));
+    getSelectedRelease(projectKey)
+      .then(setSelectedReleaseTagState)
+      .catch((error) => console.error("failed to load selected release", error));
+    getTickedConfigs(projectKey)
+      .then(setTickedConfigsState)
+      .catch((error) => console.error("failed to load ticked configs", error));
+  }, [projectKey]);
+
+  useEffect(() => {
+    if (!selectedReleaseTag) {
+      setSyncedConfigs([]);
+      return;
+    }
+    listSyncedConfigs(projectKey, selectedReleaseTag)
+      .then(setSyncedConfigs)
+      .catch((error) => console.error("failed to list synced configs", error));
+  }, [projectKey, selectedReleaseTag]);
+
+  const isBusy = state.phase === "syncing";
+
+  const handleSelectRelease = (tag: string) => {
+    setSelectedReleaseTagState(tag);
+    setSelectedRelease(projectKey, tag).catch((error) =>
+      console.error("failed to persist selected release", error),
+    );
+  };
+
+  const handleToggleConfig = (configName: string, ticked: boolean) => {
+    setTickedConfigsState((prev) => {
+      const next = ticked ? [...prev, configName] : prev.filter((c) => c !== configName);
+      setTickedConfigs(projectKey, next).catch((error) =>
+        console.error("failed to persist ticked configs", error),
+      );
+      return next;
+    });
+  };
+
+  const handleSync = async (release: Release, assets: ReleaseAsset[]) => {
+    let succeeded = false;
+    try {
+      succeeded = await syncConfigs(release, assets);
+    } catch (error) {
+      console.error("failed to sync build configs", error);
+      return;
+    }
+    if (succeeded && selectedReleaseTag === release.tag_name) {
+      try {
+        setSyncedConfigs(await listSyncedConfigs(projectKey, release.tag_name));
+      } catch (error) {
+        console.error("failed to refresh synced configs", error);
+      }
+    }
+  };
+
+  const busyLabel =
+    state.phase === "syncing"
+      ? state.downloaded >= state.total
+        ? `Finishing up ${state.configName}...`
+        : `Downloading ${state.configName}: ${Math.round((state.downloaded / state.total) * 100)}%`
+      : undefined;
+
+  return (
+    <div>
+      <BusyOverlay active={isBusy} label={busyLabel}>
+        <BuildBrowser
+          releases={releases}
+          selectedReleaseTag={selectedReleaseTag}
+          onSelectRelease={handleSelectRelease}
+          tickedConfigs={tickedConfigs}
+          onToggleConfig={handleToggleConfig}
+          syncedConfigs={syncedConfigs}
+          onSync={handleSync}
+          disabled={isBusy}
+        />
+        <SyncStatus state={state} />
+        {selectedReleaseTag &&
+          syncedConfigs.map((config) => (
+            <SyncedBuildControls
+              key={config}
+              projectKey={projectKey}
+              releaseTag={selectedReleaseTag}
+              configName={config}
+              disabled={isBusy}
+            />
+          ))}
+      </BusyOverlay>
+      <ClearCacheButton
+        projectKey={projectKey}
+        onCleared={() => setSyncedConfigs([])}
+        disabled={isBusy}
+      />
+    </div>
+  );
+}
+
+function App() {
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  const [workspaceRoot, setWorkspaceRootState] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [boundKeys, setBoundKeys] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [showBindPopup, setShowBindPopup] = useState(false);
+  const [versionLabel, setVersionLabel] = useState<string | null>(null);
+  const { theme, setTheme } = useTheme();
+
+  useEffect(() => {
+    getVersionLabel()
+      .then(setVersionLabel)
+      .catch((error) => console.error("failed to load version label", error));
+  }, []);
+
+  useEffect(() => {
+    isLoggedIn()
+      .then(setLoggedIn)
+      .catch(() => setLoggedIn(false));
+  }, []);
+
+  useEffect(() => {
+    if (loggedIn) {
+      getWorkspaceRoot()
+        .then(setWorkspaceRootState)
+        .catch((error) => console.error("failed to load workspace root", error));
+      listProjects()
+        .then(setProjects)
+        .catch((error) => {
+          if (error === SESSION_EXPIRED_ERROR) {
+            setLoggedIn(false);
+            return;
+          }
+          console.error("failed to load projects", error);
+        });
+      listBoundProjects()
+        .then(setBoundKeys)
+        .catch((error) => console.error("failed to load bound projects", error));
+    }
+  }, [loggedIn]);
+
+  const handleToggleFavorite = async (fullName: string, favorite: boolean) => {
+    try {
+      await toggleFavorite(fullName, favorite);
+      setProjects((prev) => prev.map((p) => (p.full_name === fullName ? { ...p, favorite } : p)));
+    } catch (error) {
+      console.error("failed to toggle favorite", error);
+    }
+  };
+
+  const handleBind = async (fullName: string) => {
+    try {
+      await bindProject(fullName);
+      setBoundKeys((prev) => [...prev, fullName]);
+      setActiveTab(fullName);
+      setShowBindPopup(false);
+    } catch (error) {
+      console.error("failed to bind project", error);
+    }
+  };
+
+  const handleUnbind = async (fullName: string) => {
+    try {
+      await unbindProject(fullName);
+      setBoundKeys((prev) => prev.filter((key) => key !== fullName));
+      setActiveTab((prev) => (prev === fullName ? null : prev));
+    } catch (error) {
+      console.error("failed to unbind project", error);
+    }
+  };
+
+  const handleLoggedIn = useCallback(() => setLoggedIn(true), []);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      setLoggedIn(false);
+    } catch (error) {
+      console.error("failed to log out", error);
+    }
+  };
+
+  let content: ReactNode;
+  if (loggedIn === null) {
+    content = <p>Loading...</p>;
+  } else if (!loggedIn) {
+    content = <Login onLoggedIn={handleLoggedIn} />;
+  } else if (!workspaceRoot) {
+    content = <WorkspaceSetup onSet={setWorkspaceRootState} />;
+  } else {
+    content = (
+      <div>
+        <div className="top-bar">
+          <TabBar
+            projects={projects}
+            boundKeys={boundKeys}
+            activeKey={activeTab}
+            onSelect={setActiveTab}
+            onUnbind={handleUnbind}
+            onRequestBind={() => setShowBindPopup(true)}
+          />
+          <ThemeToggle theme={theme} onChange={setTheme} />
+          <button onClick={handleLogout}>Log out</button>
+        </div>
+        {showBindPopup && (
+          <BindProjectPopup
+            projects={projects.filter((p) => !boundKeys.includes(p.full_name))}
+            onBind={handleBind}
+            onToggleFavorite={handleToggleFavorite}
+            onClose={() => setShowBindPopup(false)}
+          />
+        )}
+        {activeTab && <ProjectDetail key={activeTab} projectKey={activeTab} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <div className="app-content">{content}</div>
+      <footer className="app-footer">{versionLabel}</footer>
+    </div>
+  );
+}
+
+export default App;
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npm run test -- App.test.tsx`
+Expected: PASS — all `ProjectDetail` and `App` tests pass.
+
+- [ ] **Step 5: Replace `App.css`**
+
+The old file was the unmodified Vite/Tauri starter template — nothing in `App.tsx` has ever used a `className`, so every rule in it (`.logo`, `.container`, `.row`, `#greet-input`) was already dead. Replace all of `src/App.css` with:
+
+```css
+:root {
+  --color-text: #0f0f0f;
+  --color-bg: #f6f6f6;
+  --color-surface: #ffffff;
+  --color-border: #dddddd;
+  --color-accent: #396cd8;
+  --color-muted: #666666;
+
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  color: var(--color-text);
+  background-color: var(--color-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: #f6f6f6;
+    --color-bg: #2f2f2f;
+    --color-surface: #0f0f0f98;
+    --color-border: #444444;
+    --color-accent: #24c8db;
+    --color-muted: #aaaaaa;
+  }
+}
+
+/* Explicit user choice always wins over the system preference above --
+   higher-specificity attribute selectors beat the bare :root inside the
+   media query regardless of source order. */
+:root[data-theme="light"] {
+  --color-text: #0f0f0f;
+  --color-bg: #f6f6f6;
+  --color-surface: #ffffff;
+  --color-border: #dddddd;
+  --color-accent: #396cd8;
+  --color-muted: #666666;
+}
+
+:root[data-theme="dark"] {
+  --color-text: #f6f6f6;
+  --color-bg: #2f2f2f;
+  --color-surface: #0f0f0f98;
+  --color-border: #444444;
+  --color-accent: #24c8db;
+  --color-muted: #aaaaaa;
+}
+
+a {
+  font-weight: 500;
+  color: var(--color-accent);
+  text-decoration: inherit;
+}
+
+input,
+button {
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  outline: none;
+  transition: border-color 0.25s;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--color-accent);
+}
+
+button:disabled,
+select:disabled,
+input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-content {
+  flex: 1;
+}
+
+.app-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  color: var(--color-muted);
+  font-size: 0.85em;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background-color: var(--color-surface);
+}
+
+.tab[aria-selected="true"] {
+  font-weight: 600;
+}
+
+.tab-close {
+  border: none;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.busy-overlay-container {
+  position: relative;
+}
+
+.busy-overlay-content--dimmed {
+  opacity: 0.45;
+  filter: grayscale(40%);
+  pointer-events: none;
+}
+
+.busy-overlay-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.throbber {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.device-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 1.2em;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+}
+```
+
+This supersedes (rather than duplicates) the overlay/device-code rules appended in Tasks 8 and 13 — this step replaces the *entire* file, folding those same rules in alongside the theme variables and tab bar/footer styles they depend on.
+
+- [ ] **Step 6: Run the full frontend test suite**
+
+Run: `npm run test`
+Expected: PASS — every test file passes, with no leftover references to the deleted `ProjectList`/`ReleaseList` or the removed `api/sync` exports.
+
+- [ ] **Step 7: Verify the frontend typechecks and builds**
+
+Run: `npm run build`
+Expected: PASS — `tsc` reports no type errors, `vite build` succeeds.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/App.tsx src/App.test.tsx src/App.css
+git commit -m "Wire tab binding, theming, and BuildBrowser together in App"
+```
+
+---
 </content>
