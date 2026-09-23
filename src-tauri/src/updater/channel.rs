@@ -15,6 +15,9 @@ impl Channel {
         Self::from_env_value(option_env!("PIXEL_BUILD_MANAGER_CHANNEL"))
     }
 
+    /// Pure parsing logic, split out from `current()` so it can be exercised
+    /// directly in tests -- `option_env!` is resolved at compile time and
+    /// can't be varied per test run.
     fn from_env_value(value: Option<&str>) -> Option<Channel> {
         match value {
             Some("release") => Some(Channel::Release),
@@ -30,7 +33,10 @@ mod tests {
 
     #[test]
     fn from_env_value_parses_release() {
-        assert_eq!(Channel::from_env_value(Some("release")), Some(Channel::Release));
+        assert_eq!(
+            Channel::from_env_value(Some("release")),
+            Some(Channel::Release)
+        );
     }
 
     #[test]
