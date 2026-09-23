@@ -58,6 +58,21 @@ impl GithubClient {
         }
     }
 
+    /// A client with no auth token, for calling public, unauthenticated
+    /// endpoints (e.g. checking this app's own public repo for updates
+    /// before the user has logged in).
+    pub fn anonymous() -> Self {
+        Self::with_base_url(String::new(), "https://api.github.com".to_string())
+    }
+
+    /// Like `anonymous()`, but pointed at a custom base URL. Exists purely
+    /// so tests can exercise the anonymous/no-token request path against a
+    /// mock server instead of the real GitHub API.
+    #[cfg(test)]
+    pub fn anonymous_with_base_url(base_url: String) -> Self {
+        Self::with_base_url(String::new(), base_url)
+    }
+
     pub fn token(&self) -> &str {
         &self.token
     }
@@ -75,11 +90,16 @@ impl GithubClient {
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        self.http
+        let builder = self
+            .http
             .request(method, format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "pixel-build-manager")
+            .header("User-Agent", "pixel-build-manager");
+        if self.token.is_empty() {
+            builder
+        } else {
+            builder.bearer_auth(&self.token)
+        }
     }
 
     async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, GithubError> {
@@ -164,7 +184,7 @@ impl GithubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{header_exists, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -383,5 +403,36 @@ mod tests {
         let client = GithubClient::with_base_url("token123".to_string(), "irrelevant".to_string());
 
         assert_eq!(client.token(), "token123");
+    }
+
+    #[test]
+    fn anonymous_has_no_token() {
+        let client = GithubClient::anonymous();
+
+        assert_eq!(client.token(), "");
+    }
+
+    #[tokio::test]
+    async fn anonymous_client_sends_no_authorization_header() {
+        let server = MockServer::start().await;
+        // If the client (incorrectly) sends an Authorization header, this
+        // mock catches it and fails the request; the real assertion is that
+        // the second, headerless mock is the one that actually responds.
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/releases"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("must not send auth"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::anonymous_with_base_url(server.uri());
+        let releases = client.list_releases("owner", "repo").await.unwrap();
+
+        assert!(releases.is_empty());
     }
 }
