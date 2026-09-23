@@ -282,17 +282,7 @@ async fn sync_release_asset_inner(
         );
     })
     .await
-    .map_err(|e| e.to_string())?;
-
-    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
-    let mut settings = Settings::load_from(&state.settings_path);
-    settings.set_active_release(project_key, release_tag, asset_name);
-    settings.save_to(&state.settings_path).map_err(|e| {
-        format!(
-            "build was downloaded and installed, but failed to record it as the active \
-             release ({e}) -- try syncing again"
-        )
-    })
+    .map_err(|e| e.to_string())
 }
 
 // Downloads/verifies the asset into the cache, same as sync_release_asset,
@@ -357,25 +347,6 @@ async fn check_release_asset_inner(
     })
     .await
     .map_err(|e| e.to_string())
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ActiveRelease {
-    release_tag: Option<String>,
-    asset_name: Option<String>,
-}
-
-#[tauri::command]
-fn get_active_release(
-    project_key: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<ActiveRelease, String> {
-    let settings = Settings::load_from(&state.settings_path);
-    let project = settings.projects.get(&project_key);
-    Ok(ActiveRelease {
-        release_tag: project.and_then(|p| p.active_release_tag.clone()),
-        asset_name: project.and_then(|p| p.active_asset_name.clone()),
-    })
 }
 
 #[tauri::command]
@@ -515,7 +486,6 @@ pub fn run() {
             set_workspace_root,
             sync_release_asset,
             check_release_asset,
-            get_active_release,
             clear_project_cache,
             list_cached_assets,
             delete_cached_asset,

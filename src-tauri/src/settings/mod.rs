@@ -2,11 +2,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    Light,
+    Dark,
+    #[default]
+    System,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSettings {
     pub favorite: bool,
-    pub active_release_tag: Option<String>,
-    pub active_asset_name: Option<String>,
+    pub selected_release_tag: Option<String>,
+    #[serde(default)]
+    pub ticked_configs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -14,6 +24,10 @@ pub struct Settings {
     pub workspace_root: Option<PathBuf>,
     #[serde(default)]
     pub projects: HashMap<String, ProjectSettings>,
+    #[serde(default)]
+    pub bound_projects: Vec<String>,
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 impl Settings {
@@ -43,10 +57,38 @@ impl Settings {
         self.workspace_root = Some(root);
     }
 
-    pub fn set_active_release(&mut self, project_key: &str, release_tag: &str, asset_name: &str) {
-        let project = self.projects.entry(project_key.to_string()).or_default();
-        project.active_release_tag = Some(release_tag.to_string());
-        project.active_asset_name = Some(asset_name.to_string());
+    /// Appends `project_key` to the tab order if it isn't already bound.
+    /// Binding an already-bound project is a no-op rather than moving it to
+    /// the end -- rebinding must never reorder existing tabs.
+    pub fn bind_project(&mut self, project_key: &str) {
+        if !self.bound_projects.iter().any(|p| p == project_key) {
+            self.bound_projects.push(project_key.to_string());
+        }
+    }
+
+    /// Removes `project_key` from the tab order. Leaves its `ProjectSettings`
+    /// entry (selected release, ticked configs, favorite) untouched, so
+    /// rebinding later restores where the user left off.
+    pub fn unbind_project(&mut self, project_key: &str) {
+        self.bound_projects.retain(|p| p != project_key);
+    }
+
+    pub fn set_selected_release(&mut self, project_key: &str, release_tag: &str) {
+        self.projects
+            .entry(project_key.to_string())
+            .or_default()
+            .selected_release_tag = Some(release_tag.to_string());
+    }
+
+    pub fn set_ticked_configs(&mut self, project_key: &str, configs: Vec<String>) {
+        self.projects
+            .entry(project_key.to_string())
+            .or_default()
+            .ticked_configs = configs;
+    }
+
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
     }
 }
 
@@ -65,6 +107,11 @@ mod tests {
     }
 
     #[test]
+    fn default_theme_is_system() {
+        assert_eq!(Settings::default().theme, Theme::System);
+    }
+
+    #[test]
     fn save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("settings.json");
@@ -74,13 +121,15 @@ mod tests {
             "pixel-perfect/last-beacon".to_string(),
             ProjectSettings {
                 favorite: true,
-                active_release_tag: Some("0.2.14".to_string()),
-                active_asset_name: Some("last-beacon-windows-x64-shipping.zip".to_string()),
+                selected_release_tag: Some("0.2.14".to_string()),
+                ticked_configs: vec!["shipping.zip".to_string()],
             },
         );
         let settings = Settings {
             workspace_root: Some(PathBuf::from("D:\\Builds")),
             projects,
+            bound_projects: vec!["pixel-perfect/last-beacon".to_string()],
+            theme: Theme::Dark,
         };
 
         settings.save_to(&path).unwrap();
@@ -112,16 +161,66 @@ mod tests {
     }
 
     #[test]
-    fn set_active_release_records_tag_and_asset() {
+    fn bind_project_appends_in_order_and_is_idempotent() {
         let mut settings = Settings::default();
 
-        settings.set_active_release("org/repo", "0.2.14", "build-shipping.zip");
+        settings.bind_project("org/repo-a");
+        settings.bind_project("org/repo-b");
+        settings.bind_project("org/repo-a");
 
-        let project = &settings.projects["org/repo"];
-        assert_eq!(project.active_release_tag, Some("0.2.14".to_string()));
+        assert_eq!(settings.bound_projects, vec!["org/repo-a", "org/repo-b"]);
+    }
+
+    #[test]
+    fn unbind_project_removes_it_and_is_a_no_op_when_absent() {
+        let mut settings = Settings::default();
+        settings.bind_project("org/repo-a");
+        settings.bind_project("org/repo-b");
+
+        settings.unbind_project("org/repo-a");
+        settings.unbind_project("org/does-not-exist");
+
+        assert_eq!(settings.bound_projects, vec!["org/repo-b"]);
+    }
+
+    #[test]
+    fn set_selected_release_records_the_tag() {
+        let mut settings = Settings::default();
+
+        settings.set_selected_release("org/repo", "0.2.14");
+
         assert_eq!(
-            project.active_asset_name,
-            Some("build-shipping.zip".to_string())
+            settings.projects["org/repo"].selected_release_tag,
+            Some("0.2.14".to_string())
         );
+    }
+
+    #[test]
+    fn set_ticked_configs_replaces_the_list() {
+        let mut settings = Settings::default();
+        settings.set_ticked_configs("org/repo", vec!["a.zip".to_string()]);
+
+        settings.set_ticked_configs("org/repo", vec!["b.zip".to_string(), "c.zip".to_string()]);
+
+        assert_eq!(
+            settings.projects["org/repo"].ticked_configs,
+            vec!["b.zip".to_string(), "c.zip".to_string()]
+        );
+    }
+
+    #[test]
+    fn set_theme_updates_the_field() {
+        let mut settings = Settings::default();
+
+        settings.set_theme(Theme::Dark);
+
+        assert_eq!(settings.theme, Theme::Dark);
+    }
+
+    #[test]
+    fn theme_serializes_as_lowercase_strings() {
+        assert_eq!(serde_json::to_string(&Theme::Light).unwrap(), "\"light\"");
+        assert_eq!(serde_json::to_string(&Theme::Dark).unwrap(), "\"dark\"");
+        assert_eq!(serde_json::to_string(&Theme::System).unwrap(), "\"system\"");
     }
 }
