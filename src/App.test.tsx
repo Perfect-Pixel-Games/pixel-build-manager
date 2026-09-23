@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ProjectDetail } from "./App";
+import App, { ProjectDetail } from "./App";
 import * as projectsApi from "./api/projects";
 import * as syncApi from "./api/sync";
+import * as authApi from "./api/auth";
+import * as versionApi from "./api/version";
 import type { Release } from "./api/projects";
 
 vi.mock("./api/projects");
 vi.mock("./api/sync");
+vi.mock("./api/auth");
+vi.mock("./api/version");
 
 const release: Release = {
   id: 1,
@@ -48,5 +52,17 @@ describe("ProjectDetail", () => {
     expect(syncApi.checkReleaseAsset).toHaveBeenNthCalledWith(1, "org/repo", release.assets[1]);
     expect(syncApi.checkReleaseAsset).toHaveBeenNthCalledWith(2, "org/repo", release.assets[2]);
     expect(syncApi.syncReleaseAsset).toHaveBeenCalledWith("org/repo", release, release.assets[0]);
+  });
+});
+
+describe("App", () => {
+  it("shows the version label in the footer even before logging in", async () => {
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+    vi.mocked(authApi.onLoginStatus).mockResolvedValue(() => {});
+    vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
+
+    render(<App />);
+
+    expect(await screen.findByText("Release 0.4.0")).toBeInTheDocument();
   });
 });
