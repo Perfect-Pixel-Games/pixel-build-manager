@@ -2546,4 +2546,584 @@ git commit -m "Rewrite useSync to sync multiple build configs sequentially"
 ```
 
 ---
+
+### Task 7: Frontend — trim `SyncStatus` to done/error only
+
+**Files:**
+- Modify: `src/components/SyncStatus.tsx` (whole file)
+- Modify: `src/components/SyncStatus.test.tsx` (whole file)
+
+The "syncing" (percentage/"finishing up") text this component used to render is now the `BusyOverlay`'s job (Task 8) — showing it here too would duplicate the same information in two places at once. `SyncStatus` keeps only the post-sync outcomes: a completed message, or the error message.
+
+- [ ] **Step 1: Write the failing test**
+
+Replace all of `src/components/SyncStatus.test.tsx` with:
+
+```tsx
+import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { SyncStatus } from "./SyncStatus";
+
+describe("SyncStatus", () => {
+  it("renders nothing when idle", () => {
+    const { container } = render(<SyncStatus state={{ phase: "idle" }} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders nothing while syncing (the busy overlay owns that display)", () => {
+    const { container } = render(
+      <SyncStatus state={{ phase: "syncing", configName: "shipping.zip", downloaded: 500, total: 1000 }} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows a success message when done", () => {
+    render(<SyncStatus state={{ phase: "done" }} />);
+    expect(screen.getByText(/synced/i)).toBeInTheDocument();
+  });
+
+  it("shows the error message on failure", () => {
+    render(<SyncStatus state={{ phase: "error", message: "network down" }} />);
+    expect(screen.getByText(/network down/)).toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm run test -- SyncStatus.test.tsx`
+Expected: FAIL — the current implementation still renders a percentage/"finishing up" message for the "syncing" phase, and the "syncing" state shape it expects (`downloaded`/`total` with no `configName`) no longer matches `SyncState`.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Replace all of `src/components/SyncStatus.tsx` with:
+
+```tsx
+import type { SyncState } from "../hooks/useSync";
+
+type Props = {
+  state: SyncState;
+};
+
+export function SyncStatus({ state }: Props) {
+  if (state.phase === "done") {
+    return <p>Synced.</p>;
+  }
+  if (state.phase === "error") {
+    return <p>Sync failed: {state.message}</p>;
+  }
+  return null;
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npm run test -- SyncStatus.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/SyncStatus.tsx src/components/SyncStatus.test.tsx
+git commit -m "Trim SyncStatus to post-sync outcomes only"
+```
+
+---
+
+### Task 8: Frontend — `BusyOverlay` component
+
+**Files:**
+- Create: `src/components/BusyOverlay.tsx`
+- Create: `src/components/BusyOverlay.test.tsx`
+- Modify: `src/App.css` (append overlay styles)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/components/BusyOverlay.test.tsx`:
+
+```tsx
+import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { BusyOverlay } from "./BusyOverlay";
+
+describe("BusyOverlay", () => {
+  it("always renders its children", () => {
+    render(
+      <BusyOverlay active={false}>
+        <button>Sync</button>
+      </BusyOverlay>,
+    );
+
+    expect(screen.getByRole("button", { name: "Sync" })).toBeInTheDocument();
+  });
+
+  it("renders no status/throbber when inactive", () => {
+    render(
+      <BusyOverlay active={false}>
+        <button>Sync</button>
+      </BusyOverlay>,
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("renders a status region with the label when active, alongside the still-mounted children", () => {
+    render(
+      <BusyOverlay active label="Downloading shipping.zip: 50%">
+        <button>Sync</button>
+      </BusyOverlay>,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Downloading shipping.zip: 50%");
+    expect(screen.getByRole("button", { name: "Sync" })).toBeInTheDocument();
+  });
+
+  it("marks the content inert when active, so it can't be interacted with underneath the overlay", () => {
+    const { container } = render(
+      <BusyOverlay active label="Working...">
+        <button>Sync</button>
+      </BusyOverlay>,
+    );
+
+    expect(container.querySelector(".busy-overlay-content")).toHaveAttribute("inert");
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm run test -- BusyOverlay.test.tsx`
+Expected: FAIL — `src/components/BusyOverlay.tsx` does not exist yet.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Create `src/components/BusyOverlay.tsx`:
+
+```tsx
+import type { ReactNode } from "react";
+
+type Props = {
+  active: boolean;
+  label?: string;
+  children: ReactNode;
+};
+
+/** Wraps `children` in a dimmed, inert layer with a centered throbber +
+ * label overlaid on top whenever `active` -- the wrapped UI stays mounted
+ * and visible underneath rather than being replaced. */
+export function BusyOverlay({ active, label, children }: Props) {
+  return (
+    <div className="busy-overlay-container">
+      <div
+        className={`busy-overlay-content${active ? " busy-overlay-content--dimmed" : ""}`}
+        inert={active}
+      >
+        {children}
+      </div>
+      {active && (
+        <div className="busy-overlay-layer" role="status">
+          <span className="throbber" aria-hidden="true" />
+          {label && <span>{label}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npm run test -- BusyOverlay.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Add the overlay styles**
+
+Append to `src/App.css`:
+
+```css
+.busy-overlay-container {
+  position: relative;
+}
+
+.busy-overlay-content--dimmed {
+  opacity: 0.45;
+  filter: grayscale(40%);
+  pointer-events: none;
+}
+
+.busy-overlay-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.throbber {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+```
+
+(`--color-border`/`--color-accent` are defined in Task 15, which also rewrites the rest of `App.css` — this task only appends the overlay-specific rules; the CSS variables not existing yet has no effect on this task's own tests, since jsdom doesn't compute actual styles.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/components/BusyOverlay.tsx src/components/BusyOverlay.test.tsx src/App.css
+git commit -m "Add BusyOverlay component for in-place busy states"
+```
+
+---
+
+### Task 9: Frontend — `TabBar` component
+
+**Files:**
+- Create: `src/components/TabBar.tsx`
+- Create: `src/components/TabBar.test.tsx`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/components/TabBar.test.tsx`:
+
+```tsx
+import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { fireEvent } from "@testing-library/react";
+import { TabBar } from "./TabBar";
+import type { Project } from "../api/projects";
+
+const projects: Project[] = [
+  { full_name: "org/repo-a", owner: "org", name: "repo-a", favorite: false },
+  { full_name: "org/repo-b", owner: "org", name: "repo-b", favorite: false },
+];
+
+describe("TabBar", () => {
+  it("shows only the bind button when nothing is bound", () => {
+    render(
+      <TabBar
+        projects={projects}
+        boundKeys={[]}
+        activeKey={null}
+        onSelect={() => {}}
+        onUnbind={() => {}}
+        onRequestBind={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("renders a tab per bound project, in bind order, using its display name", () => {
+    render(
+      <TabBar
+        projects={projects}
+        boundKeys={["org/repo-b", "org/repo-a"]}
+        activeKey={null}
+        onSelect={() => {}}
+        onUnbind={() => {}}
+        onRequestBind={() => {}}
+      />,
+    );
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]).toHaveTextContent("repo-b");
+    expect(tabs[1]).toHaveTextContent("repo-a");
+  });
+
+  it("marks the active tab as selected", () => {
+    render(
+      <TabBar
+        projects={projects}
+        boundKeys={["org/repo-a", "org/repo-b"]}
+        activeKey="org/repo-b"
+        onSelect={() => {}}
+        onUnbind={() => {}}
+        onRequestBind={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("repo-b");
+  });
+
+  it("calls onSelect with the project key when a tab is clicked", () => {
+    const onSelect = vi.fn();
+    render(
+      <TabBar
+        projects={projects}
+        boundKeys={["org/repo-a"]}
+        activeKey={null}
+        onSelect={onSelect}
+        onUnbind={() => {}}
+        onRequestBind={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "repo-a" }));
+
+    expect(onSelect).toHaveBeenCalledWith("org/repo-a");
+  });
+
+  it("calls onUnbind with the project key when a tab's close button is clicked", () => {
+    const onUnbind = vi.fn();
+    render(
+      <TabBar
+        projects={projects}
+        boundKeys={["org/repo-a"]}
+        activeKey={null}
+        onSelect={() => {}}
+        onUnbind={onUnbind}
+        onRequestBind={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close repo-a" }));
+
+    expect(onUnbind).toHaveBeenCalledWith("org/repo-a");
+  });
+
+  it("calls onRequestBind when the + button is clicked", () => {
+    const onRequestBind = vi.fn();
+    render(
+      <TabBar
+        projects={projects}
+        boundKeys={[]}
+        activeKey={null}
+        onSelect={() => {}}
+        onUnbind={() => {}}
+        onRequestBind={onRequestBind}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind a project" }));
+
+    expect(onRequestBind).toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm run test -- TabBar.test.tsx`
+Expected: FAIL — `src/components/TabBar.tsx` does not exist yet.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Create `src/components/TabBar.tsx`:
+
+```tsx
+import type { Project } from "../api/projects";
+
+type Props = {
+  projects: Project[];
+  boundKeys: string[];
+  activeKey: string | null;
+  onSelect: (fullName: string) => void;
+  onUnbind: (fullName: string) => void;
+  onRequestBind: () => void;
+};
+
+export function TabBar({ projects, boundKeys, activeKey, onSelect, onUnbind, onRequestBind }: Props) {
+  const byKey = new Map(projects.map((p) => [p.full_name, p]));
+
+  return (
+    <div className="tab-bar" role="tablist" aria-label="Bound projects">
+      {boundKeys.map((key) => {
+        const name = byKey.get(key)?.name ?? key;
+        return (
+          <span key={key} className="tab" role="tab" aria-selected={key === activeKey}>
+            <button onClick={() => onSelect(key)}>{name}</button>
+            <button className="tab-close" aria-label={`Close ${name}`} onClick={() => onUnbind(key)}>
+              ×
+            </button>
+          </span>
+        );
+      })}
+      <button aria-label="Bind a project" onClick={onRequestBind}>
+        +
+      </button>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npm run test -- TabBar.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/TabBar.tsx src/components/TabBar.test.tsx
+git commit -m "Add TabBar component for bound-project navigation"
+```
+
+---
+
+### Task 10: Frontend — `BindProjectPopup` component
+
+**Files:**
+- Create: `src/components/BindProjectPopup.tsx`
+- Create: `src/components/BindProjectPopup.test.tsx`
+
+**Note:** the caller (App.tsx, Task 15) is responsible for only passing in *unbound* projects — this component itself doesn't know about `boundKeys`, matching how `ProjectList` never knew about selection state either.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/components/BindProjectPopup.test.tsx`:
+
+```tsx
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { BindProjectPopup } from "./BindProjectPopup";
+import type { Project } from "../api/projects";
+
+const projects: Project[] = [
+  { full_name: "org/last-beacon", owner: "org", name: "last-beacon", favorite: true },
+  { full_name: "org/other-game", owner: "org", name: "other-game", favorite: false },
+];
+
+describe("BindProjectPopup", () => {
+  it("lists every candidate project", () => {
+    render(
+      <BindProjectPopup projects={projects} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
+    );
+
+    expect(screen.getByRole("button", { name: "last-beacon" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "other-game" })).toBeInTheDocument();
+  });
+
+  it("filters the list by search text", () => {
+    render(
+      <BindProjectPopup projects={projects} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search projects"), { target: { value: "other" } });
+
+    expect(screen.queryByRole("button", { name: "last-beacon" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "other-game" })).toBeInTheDocument();
+  });
+
+  it("calls onBind with the project's full name when clicked", () => {
+    const onBind = vi.fn();
+    render(
+      <BindProjectPopup projects={projects} onBind={onBind} onToggleFavorite={() => {}} onClose={() => {}} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "last-beacon" }));
+
+    expect(onBind).toHaveBeenCalledWith("org/last-beacon");
+  });
+
+  it("calls onToggleFavorite when a star is clicked", () => {
+    const onToggleFavorite = vi.fn();
+    render(
+      <BindProjectPopup
+        projects={projects}
+        onBind={() => {}}
+        onToggleFavorite={onToggleFavorite}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle favorite for other-game" }));
+
+    expect(onToggleFavorite).toHaveBeenCalledWith("org/other-game", true);
+  });
+
+  it("calls onClose when Close is clicked", () => {
+    const onClose = vi.fn();
+    render(
+      <BindProjectPopup projects={projects} onBind={() => {}} onToggleFavorite={() => {}} onClose={onClose} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm run test -- BindProjectPopup.test.tsx`
+Expected: FAIL — `src/components/BindProjectPopup.tsx` does not exist yet.
+
+- [ ] **Step 3: Write the minimal implementation**
+
+Create `src/components/BindProjectPopup.tsx`:
+
+```tsx
+import { useState } from "react";
+import type { Project } from "../api/projects";
+
+type Props = {
+  projects: Project[];
+  onBind: (fullName: string) => void;
+  onToggleFavorite: (fullName: string, favorite: boolean) => void;
+  onClose: () => void;
+};
+
+export function BindProjectPopup({ projects, onBind, onToggleFavorite, onClose }: Props) {
+  const [search, setSearch] = useState("");
+  const filtered = projects.filter((project) =>
+    project.name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  return (
+    <div role="dialog" aria-label="Bind a project">
+      <input
+        aria-label="Search projects"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
+      <ul>
+        {filtered.map((project) => (
+          <li key={project.full_name}>
+            <button
+              aria-label={`Toggle favorite for ${project.name}`}
+              aria-pressed={project.favorite}
+              onClick={() => onToggleFavorite(project.full_name, !project.favorite)}
+            >
+              {project.favorite ? "★" : "☆"}
+            </button>
+            <button onClick={() => onBind(project.full_name)}>{project.name}</button>
+          </li>
+        ))}
+      </ul>
+      <button onClick={onClose}>Close</button>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npm run test -- BindProjectPopup.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/BindProjectPopup.tsx src/components/BindProjectPopup.test.tsx
+git commit -m "Add BindProjectPopup component"
+```
+
+---
 </content>
