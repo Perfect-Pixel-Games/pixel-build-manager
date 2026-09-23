@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { isLoggedIn, logout } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
@@ -11,6 +11,7 @@ import {
   launchActiveBuild,
   listCachedAssets,
 } from "./api/sync";
+import { getVersionLabel } from "./api/version";
 import { ClearCacheButton } from "./components/ClearCacheButton";
 import { Login } from "./components/Login";
 import { ProjectList } from "./components/ProjectList";
@@ -197,6 +198,13 @@ function App() {
   const [workspaceRoot, setWorkspaceRootState] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [versionLabel, setVersionLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    getVersionLabel()
+      .then(setVersionLabel)
+      .catch((error) => console.error("failed to load version label", error));
+  }, []);
 
   useEffect(() => {
     isLoggedIn()
@@ -226,34 +234,38 @@ function App() {
 
   const handleLoggedIn = useCallback(() => setLoggedIn(true), []);
 
+  let content: ReactNode;
   if (loggedIn === null) {
-    return <p>Loading...</p>;
-  }
-
-  if (!loggedIn) {
-    return <Login onLoggedIn={handleLoggedIn} />;
-  }
-
-  if (!workspaceRoot) {
-    return <WorkspaceSetup onSet={setWorkspaceRootState} />;
+    content = <p>Loading...</p>;
+  } else if (!loggedIn) {
+    content = <Login onLoggedIn={handleLoggedIn} />;
+  } else if (!workspaceRoot) {
+    content = <WorkspaceSetup onSet={setWorkspaceRootState} />;
+  } else {
+    content = (
+      <div>
+        <button
+          onClick={async () => {
+            try {
+              await logout();
+              setLoggedIn(false);
+            } catch (error) {
+              console.error("failed to log out", error);
+            }
+          }}
+        >
+          Log out
+        </button>
+        <ProjectList projects={projects} onSelect={setSelectedProject} onToggleFavorite={handleToggleFavorite} />
+        {selectedProject && <ProjectDetail key={selectedProject} projectKey={selectedProject} />}
+      </div>
+    );
   }
 
   return (
     <div>
-      <button
-        onClick={async () => {
-          try {
-            await logout();
-            setLoggedIn(false);
-          } catch (error) {
-            console.error("failed to log out", error);
-          }
-        }}
-      >
-        Log out
-      </button>
-      <ProjectList projects={projects} onSelect={setSelectedProject} onToggleFavorite={handleToggleFavorite} />
-      {selectedProject && <ProjectDetail key={selectedProject} projectKey={selectedProject} />}
+      {content}
+      <footer>{versionLabel}</footer>
     </div>
   );
 }
