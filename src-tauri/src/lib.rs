@@ -18,6 +18,7 @@ use sync::cache::{active_dir, cache_dir, cached_asset_path, list_cached_asset_id
 use sync::launch::{find_active_executable, launch_executable};
 use sync::orchestrator::{ensure_asset_cached, sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
+use updater::channel::Channel;
 use updater::start_background_updates;
 
 const GITHUB_CLIENT_ID: &str = "Ov23ligQDGOJvlWsEXJc";
@@ -171,6 +172,11 @@ fn get_workspace_root(state: tauri::State<'_, AppState>) -> Result<Option<String
     Ok(settings
         .workspace_root
         .map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn get_version_label(app: tauri::AppHandle) -> String {
+    version::format_version_label(Channel::current(), &app.package_info().version.to_string())
 }
 
 #[tauri::command]
@@ -504,7 +510,8 @@ pub fn run() {
             delete_cached_asset,
             get_active_executable,
             launch_active_build,
-            get_active_build_dir
+            get_active_build_dir,
+            get_version_label
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
