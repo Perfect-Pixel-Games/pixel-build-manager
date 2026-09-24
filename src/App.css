@@ -157,3 +157,15 @@ button {
     transform: rotate(360deg);
   }
 }
+
+.device-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 1.2em;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+}
