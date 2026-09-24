@@ -109,7 +109,9 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Release 0.4.0")).toBeInTheDocument();
+    const versionLabel = await screen.findByText("Release 0.4.0");
+    expect(versionLabel).toBeInTheDocument();
+    expect(versionLabel.closest(".app-footer")).not.toBeNull();
   });
 
   it("routes back to the Login screen when loading projects reports the session has expired", async () => {
