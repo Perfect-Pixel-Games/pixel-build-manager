@@ -64,32 +64,35 @@ export function Login({ onLoggedIn }: Props) {
   };
 
   return (
-    <div>
-      <button onClick={handleLogin}>Log in with GitHub</button>
-      {status?.status === "awaiting_user" && (
-        <div>
-          <p>We opened {status.verification_uri} in your browser.</p>
-          <span className="device-code">
-            <strong>{status.user_code}</strong>
-            <button onClick={() => handleCopyCode(status.user_code)}>{copied ? "Copied!" : "Copy"}</button>
-          </span>
-          <p>
-            Didn't open automatically?{" "}
-            <a
-              href={status.verification_uri}
-              onClick={(event) => {
-                event.preventDefault();
-                handleOpenManually(status.verification_uri);
-              }}
-            >
-              Open {status.verification_uri} manually
-            </a>
-          </p>
-        </div>
-      )}
-      {status?.status === "denied" && <p>Login was denied.</p>}
-      {status?.status === "expired" && <p>The login code expired. Try again.</p>}
-      {status?.status === "error" && <p>Login failed: {status.error}</p>}
+    <div className="centered-screen">
+      <div className="centered-card">
+        <p className="centered-card__lede">Sign in to browse and sync your team's builds.</p>
+        <button onClick={handleLogin}>Log in with GitHub</button>
+        {status?.status === "awaiting_user" && (
+          <div className="login-device">
+            <p>We opened {status.verification_uri} in your browser.</p>
+            <span className="device-code">
+              <strong>{status.user_code}</strong>
+              <button onClick={() => handleCopyCode(status.user_code)}>{copied ? "Copied!" : "Copy"}</button>
+            </span>
+            <p className="login-device__fallback">
+              Didn't open automatically?{" "}
+              <a
+                href={status.verification_uri}
+                onClick={(event) => {
+                  event.preventDefault();
+                  handleOpenManually(status.verification_uri);
+                }}
+              >
+                Open {status.verification_uri} manually
+              </a>
+            </p>
+          </div>
+        )}
+        {status?.status === "denied" && <p className="error-text">Login was denied.</p>}
+        {status?.status === "expired" && <p className="error-text">The login code expired. Try again.</p>}
+        {status?.status === "error" && <p className="error-text">Login failed: {status.error}</p>}
+      </div>
     </div>
   );
 }

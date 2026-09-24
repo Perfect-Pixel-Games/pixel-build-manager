@@ -45,18 +45,24 @@ export function SyncedBuildControls({ projectKey, releaseTag, configName, disabl
   };
 
   return (
-    <span>
+    <div className="synced-build-row">
+      <span className="synced-build-row__name">{configName}</span>
       {buildDir && (
         <button aria-label={`Open folder for ${configName}`} disabled={disabled} onClick={handleOpenFolder}>
           Open Folder
         </button>
       )}
       {executable && (
-        <button aria-label={`Launch ${configName}`} disabled={disabled} onClick={handleLaunch}>
-          Launch
+        <button
+          className="synced-build-row__launch"
+          aria-label={`Launch ${configName}`}
+          disabled={disabled}
+          onClick={handleLaunch}
+        >
+          ▶ Launch
         </button>
       )}
-      {error && <p>{error}</p>}
-    </span>
+      {error && <p className="error-text">{error}</p>}
+    </div>
   );
 }

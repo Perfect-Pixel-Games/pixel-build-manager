@@ -26,11 +26,11 @@ export function ClearCacheButton({ projectKey, onCleared, disabled = false }: Pr
   };
 
   return (
-    <div>
+    <div className="clear-cache">
       <button onClick={handleClick} disabled={pending || disabled}>
         {pending ? "Clearing cache..." : "Clear cache"}
       </button>
-      {error && <p>Failed to clear cache: {error}</p>}
+      {error && <p className="error-text">Failed to clear cache: {error}</p>}
     </div>
   );
 }

@@ -36,7 +36,7 @@ const releases: Release[] = [
 const noop = () => {};
 
 describe("BuildBrowser", () => {
-  it("lists releases but never prereleases", () => {
+  it("lists releases and prereleases, labeling prereleases distinctly", () => {
     render(
       <BuildBrowser
         releases={releases}
@@ -52,7 +52,7 @@ describe("BuildBrowser", () => {
 
     expect(screen.getByRole("button", { name: "LastBeacon 0.2.14" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "LastBeacon 0.2.13" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "LastBeacon 0.3.0-rc1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LastBeacon 0.3.0-rc1 (prerelease)" })).toBeInTheDocument();
   });
 
   it("filters the release list by the search box", () => {

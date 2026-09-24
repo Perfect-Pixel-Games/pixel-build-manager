@@ -1,6 +1,11 @@
 import { useMemo, useState } from "react";
 import type { Release, ReleaseAsset } from "../api/projects";
 
+function releaseLabel(release: Release): string {
+  const base = release.name ?? release.tag_name;
+  return release.prerelease ? `${base} (prerelease)` : base;
+}
+
 type Props = {
   releases: Release[];
   selectedReleaseTag: string | null;
@@ -41,9 +46,7 @@ export function BuildBrowser({
 
   const visibleReleases = useMemo(() => {
     const term = search.toLowerCase();
-    return releases
-      .filter((release) => !release.prerelease)
-      .filter((release) => (release.name ?? release.tag_name).toLowerCase().includes(term));
+    return releases.filter((release) => (release.name ?? release.tag_name).toLowerCase().includes(term));
   }, [releases, search]);
 
   const selectedRelease = releases.find((release) => release.tag_name === selectedReleaseTag) ?? null;
@@ -62,46 +65,64 @@ export function BuildBrowser({
   };
 
   return (
-    <div>
+    <div className="build-browser">
       <input
+        className="build-browser__search"
         aria-label="Search releases"
+        placeholder="Search releases..."
         value={search}
         disabled={disabled}
         onChange={(event) => setSearch(event.target.value)}
       />
-      <ul>
-        {visibleReleases.map((release) => (
-          <li key={release.id}>
+      <div className="release-list">
+        {visibleReleases.length === 0 ? (
+          <p className="release-list__empty">No releases found.</p>
+        ) : (
+          visibleReleases.map((release) => (
             <button
+              key={release.id}
+              className="release-row"
+              aria-label={releaseLabel(release)}
               aria-pressed={release.tag_name === selectedReleaseTag}
               disabled={disabled}
               onClick={() => onSelectRelease(release.tag_name)}
             >
-              {release.name ?? release.tag_name}
+              <span className="release-row__name">{releaseLabel(release)}</span>
+              {release.published_at && (
+                <span className="release-row__date">
+                  {new Date(release.published_at).toLocaleDateString()}
+                </span>
+              )}
             </button>
-          </li>
-        ))}
-      </ul>
-      <fieldset>
+          ))
+        )}
+      </div>
+      <fieldset className="build-configs">
         <legend>Build configs</legend>
-        {buildConfigs.map((config) => {
-          const availableForSelected =
-            !selectedRelease || selectedRelease.assets.some((asset) => asset.name === config);
-          return (
-            <label key={config}>
-              <input
-                type="checkbox"
-                aria-label={config}
-                checked={tickedConfigs.includes(config)}
-                disabled={disabled || !availableForSelected}
-                onChange={(event) => onToggleConfig(config, event.target.checked)}
-              />
-              {config}
-            </label>
-          );
-        })}
+        <div className="build-configs__list">
+          {buildConfigs.map((config) => {
+            const availableForSelected =
+              !selectedRelease || selectedRelease.assets.some((asset) => asset.name === config);
+            return (
+              <label key={config} className="config-chip">
+                <input
+                  type="checkbox"
+                  aria-label={config}
+                  checked={tickedConfigs.includes(config)}
+                  disabled={disabled || !availableForSelected}
+                  onChange={(event) => onToggleConfig(config, event.target.checked)}
+                />
+                {config}
+              </label>
+            );
+          })}
+        </div>
       </fieldset>
-      <button disabled={disabled || availableTickedAssets.length === 0} onClick={handleSyncClick}>
+      <button
+        className={`sync-button${fullySynced ? " sync-button--synced" : ""}`}
+        disabled={disabled || availableTickedAssets.length === 0}
+        onClick={handleSyncClick}
+      >
         {fullySynced ? "✓ Synced" : "Sync"}
       </button>
     </div>

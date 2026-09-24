@@ -25,7 +25,7 @@ export function TabBar({ projects, boundKeys, activeKey, onSelect, onUnbind, onR
           </span>
         );
       })}
-      <button aria-label="Bind a project" onClick={onRequestBind}>
+      <button className="tab-bind" aria-label="Bind a project" onClick={onRequestBind}>
         +
       </button>
     </div>

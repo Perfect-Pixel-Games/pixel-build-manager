@@ -97,7 +97,7 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
       : undefined;
 
   return (
-    <div>
+    <div className="project-detail">
       <BusyOverlay active={isBusy} label={busyLabel}>
         <BuildBrowser
           releases={releases}
@@ -110,16 +110,19 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
           disabled={isBusy}
         />
         <SyncStatus state={state} />
-        {selectedReleaseTag &&
-          syncedConfigs.map((config) => (
-            <SyncedBuildControls
-              key={config}
-              projectKey={projectKey}
-              releaseTag={selectedReleaseTag}
-              configName={config}
-              disabled={isBusy}
-            />
-          ))}
+        {selectedReleaseTag && syncedConfigs.length > 0 && (
+          <div className="synced-builds">
+            {syncedConfigs.map((config) => (
+              <SyncedBuildControls
+                key={config}
+                projectKey={projectKey}
+                releaseTag={selectedReleaseTag}
+                configName={config}
+                disabled={isBusy}
+              />
+            ))}
+          </div>
+        )}
       </BusyOverlay>
       <ClearCacheButton
         projectKey={projectKey}
@@ -223,14 +226,18 @@ function App() {
 
   let content: ReactNode;
   if (loggedIn === null) {
-    content = <p>Loading...</p>;
+    content = (
+      <div className="centered-screen">
+        <p className="centered-card__lede">Loading...</p>
+      </div>
+    );
   } else if (!loggedIn) {
     content = <Login onLoggedIn={handleLoggedIn} />;
   } else if (!workspaceRoot) {
     content = <WorkspaceSetup onSet={setWorkspaceRootState} />;
   } else {
     content = (
-      <div>
+      <div className="main-view">
         <div className="top-bar">
           <TabBar
             projects={projects}
@@ -251,7 +258,11 @@ function App() {
             onClose={() => setShowBindPopup(false)}
           />
         )}
-        {activeTab && <ProjectDetail key={activeTab} projectKey={activeTab} />}
+        {activeTab ? (
+          <ProjectDetail key={activeTab} projectKey={activeTab} />
+        ) : (
+          <p className="empty-state">Bind a project to get started.</p>
+        )}
       </div>
     );
   }
