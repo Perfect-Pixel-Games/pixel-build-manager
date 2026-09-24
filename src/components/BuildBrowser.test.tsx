@@ -269,4 +269,81 @@ describe("BuildBrowser", () => {
     expect(screen.getByLabelText("shipping.zip")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
   });
+
+  describe("projects whose asset names embed the release version", () => {
+    // Mirrors this app's own Tauri-built installer naming convention
+    // ("pixel-build-manager_0.0.3_x64-setup.exe") -- without stripping the
+    // release's own version out of the asset name first, every release
+    // would register as a brand new build config instead of the one config
+    // it actually is.
+    const versionedReleases: Release[] = [
+      {
+        id: 1,
+        tag_name: "0.0.3",
+        name: "Pixel Build Manager 0.0.3",
+        prerelease: true,
+        published_at: "2026-09-23T00:00:00Z",
+        assets: [
+          {
+            id: 100,
+            name: "pixel-build-manager_0.0.3_x64-setup.exe",
+            size: 100,
+            browser_download_url: "https://example.com/a",
+          },
+        ],
+      },
+      {
+        id: 2,
+        tag_name: "0.0.2",
+        name: "Pixel Build Manager 0.0.2",
+        prerelease: true,
+        published_at: "2026-09-20T00:00:00Z",
+        assets: [
+          {
+            id: 90,
+            name: "pixel-build-manager_0.0.2_x64-setup.exe",
+            size: 100,
+            browser_download_url: "https://example.com/b",
+          },
+        ],
+      },
+    ];
+
+    it("collapses per-release versioned asset names into a single build config", () => {
+      render(
+        <BuildBrowser
+          releases={versionedReleases}
+          selectedReleaseTag={null}
+          onSelectRelease={noop}
+          tickedConfigs={[]}
+          onToggleConfig={noop}
+          syncedConfigs={[]}
+          onSync={noop}
+          disabled={false}
+        />,
+      );
+
+      expect(screen.getAllByLabelText("pixel-build-manager_x64-setup.exe")).toHaveLength(1);
+    });
+
+    it("ticking the collapsed config and syncing passes the selected release's actual asset", () => {
+      const onSync = vi.fn();
+      render(
+        <BuildBrowser
+          releases={versionedReleases}
+          selectedReleaseTag="0.0.3"
+          onSelectRelease={noop}
+          tickedConfigs={["pixel-build-manager_x64-setup.exe"]}
+          onToggleConfig={noop}
+          syncedConfigs={[]}
+          onSync={onSync}
+          disabled={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+
+      expect(onSync).toHaveBeenCalledWith(versionedReleases[0], [versionedReleases[0].assets[0]]);
+    });
+  });
 });

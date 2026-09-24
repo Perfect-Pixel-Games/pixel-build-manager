@@ -6,6 +6,25 @@ function releaseLabel(release: Release): string {
   return release.prerelease ? `${base} (prerelease)` : base;
 }
 
+// A build config's *identity* shouldn't include the release's own version --
+// otherwise a project whose CI embeds the version in the artifact filename
+// (e.g. Tauri/Electron installers: "app_0.0.3_x64-setup.exe") gets a brand
+// new "config" every single release, instead of the one stable config it
+// actually is. Stripping the release's own tag out of the asset name before
+// treating it as a config identity collapses those back into one, the same
+// way a project like last-beacon (whose asset names never vary release to
+// release, e.g. "last-beacon-windows-x64-shipping.tar.gz") already worked.
+function configTemplate(release: Release, assetName: string): string {
+  if (!release.tag_name) {
+    return assetName;
+  }
+  return assetName
+    .split(release.tag_name)
+    .join("")
+    .replace(/([._-])\1+/g, "$1")
+    .replace(/^[._-]+|[._-]+$/g, "");
+}
+
 type Props = {
   releases: Release[];
   selectedReleaseTag: string | null;
@@ -38,7 +57,7 @@ export function BuildBrowser({
     const names = new Set<string>();
     for (const release of releases) {
       for (const asset of release.assets) {
-        names.add(asset.name);
+        names.add(configTemplate(release, asset.name));
       }
     }
     return Array.from(names).sort((a, b) => a.localeCompare(b));
@@ -52,7 +71,9 @@ export function BuildBrowser({
   const selectedRelease = releases.find((release) => release.tag_name === selectedReleaseTag) ?? null;
 
   const availableTickedAssets: ReleaseAsset[] = selectedRelease
-    ? selectedRelease.assets.filter((asset) => tickedConfigs.includes(asset.name))
+    ? selectedRelease.assets.filter((asset) =>
+        tickedConfigs.includes(configTemplate(selectedRelease, asset.name)),
+      )
     : [];
   const missingAssets = availableTickedAssets.filter((asset) => !syncedConfigs.includes(asset.name));
   const fullySynced = availableTickedAssets.length > 0 && missingAssets.length === 0;
@@ -102,7 +123,8 @@ export function BuildBrowser({
         <div className="build-configs__list">
           {buildConfigs.map((config) => {
             const availableForSelected =
-              !selectedRelease || selectedRelease.assets.some((asset) => asset.name === config);
+              !selectedRelease ||
+              selectedRelease.assets.some((asset) => configTemplate(selectedRelease, asset.name) === config);
             return (
               <label key={config} className="config-chip">
                 <input
