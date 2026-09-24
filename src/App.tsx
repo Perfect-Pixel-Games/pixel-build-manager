@@ -161,7 +161,13 @@ function App() {
         .then((data) => {
           setProjects(data);
           listBoundProjects()
-            .then(setBoundKeys)
+            .then((keys) => {
+              setBoundKeys(keys);
+              // Land on the first bound tab by default, rather than an
+              // empty pane, on every fresh load -- but never override a
+              // tab the user already picked this session.
+              setActiveTab((prev) => prev ?? keys[0] ?? null);
+            })
             .catch((error) => console.error("failed to load bound projects", error));
         })
         .catch((error) => {

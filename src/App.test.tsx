@@ -136,6 +136,20 @@ describe("App", () => {
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
+  it("automatically selects the first bound tab on load", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo-a", owner: "org", name: "repo-a", favorite: false },
+      { full_name: "org/repo-b", owner: "org", name: "repo-b", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/repo-a", "org/repo-b"]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("repo-a");
+  });
+
   it("binding a project via the popup opens its tab", async () => {
     mockAppShellBaseline();
     mockProjectDetailBaseline();
