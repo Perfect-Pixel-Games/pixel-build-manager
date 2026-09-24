@@ -19,9 +19,11 @@ export function WorkspaceSetup({ onSet }: Props) {
   };
 
   return (
-    <div>
-      <p>Choose a folder where downloaded builds will be stored.</p>
-      <button onClick={handleChoose}>Choose workspace folder</button>
+    <div className="centered-screen">
+      <div className="centered-card">
+        <p className="centered-card__lede">Choose a folder where downloaded builds will be stored.</p>
+        <button onClick={handleChoose}>Choose workspace folder</button>
+      </div>
     </div>
   );
 }

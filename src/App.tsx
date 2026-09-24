@@ -1,192 +1,132 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
-import { getWorkspaceRoot } from "./api/settings";
+import { bindProject, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
 import {
-  deleteCachedAsset,
-  getActiveBuildDir,
-  getActiveExecutable,
-  getActiveRelease,
-  launchActiveBuild,
-  listCachedAssets,
+  getSelectedRelease,
+  getTickedConfigs,
+  listSyncedConfigs,
+  setSelectedRelease,
+  setTickedConfigs,
 } from "./api/sync";
 import { getVersionLabel } from "./api/version";
+import { BindProjectPopup } from "./components/BindProjectPopup";
+import { BuildBrowser } from "./components/BuildBrowser";
+import { BusyOverlay } from "./components/BusyOverlay";
 import { ClearCacheButton } from "./components/ClearCacheButton";
 import { Login } from "./components/Login";
-import { ProjectList } from "./components/ProjectList";
-import { ReleaseList } from "./components/ReleaseList";
+import { SyncedBuildControls } from "./components/SyncedBuildControls";
 import { SyncStatus } from "./components/SyncStatus";
+import { TabBar } from "./components/TabBar";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { WorkspaceSetup } from "./components/WorkspaceSetup";
 import { useSync } from "./hooks/useSync";
+import { useTheme } from "./hooks/useTheme";
 import "./App.css";
 
 export function ProjectDetail({ projectKey }: { projectKey: string }) {
   const [releases, setReleases] = useState<Release[]>([]);
-  const [activeReleaseTag, setActiveReleaseTag] = useState<string | null>(null);
-  const [activeAssetName, setActiveAssetName] = useState<string | null>(null);
-  const [activeExecutable, setActiveExecutable] = useState<string | null>(null);
-  const [activeBuildDir, setActiveBuildDir] = useState<string | null>(null);
-  const [cachedAssetIds, setCachedAssetIds] = useState<Set<number>>(new Set());
-  const [launchError, setLaunchError] = useState<string | null>(null);
-  const [openFolderError, setOpenFolderError] = useState<string | null>(null);
-  const { state, sync, check } = useSync(projectKey);
+  const [selectedReleaseTag, setSelectedReleaseTagState] = useState<string | null>(null);
+  const [tickedConfigs, setTickedConfigsState] = useState<string[]>([]);
+  const [syncedConfigs, setSyncedConfigs] = useState<string[]>([]);
+  const { state, syncConfigs } = useSync(projectKey);
 
   useEffect(() => {
     listReleasesForProject(projectKey)
       .then(setReleases)
       .catch((error) => console.error("failed to load releases", error));
-    getActiveRelease(projectKey)
-      .then((active) => {
-        setActiveReleaseTag(active.release_tag);
-        setActiveAssetName(active.asset_name);
-      })
-      .catch((error) => console.error("failed to load active release", error));
-    getActiveExecutable(projectKey)
-      .then(setActiveExecutable)
-      .catch((error) => console.error("failed to look up active executable", error));
-    getActiveBuildDir(projectKey)
-      .then(setActiveBuildDir)
-      .catch((error) => console.error("failed to look up active build dir", error));
-    listCachedAssets(projectKey)
-      .then((ids) => setCachedAssetIds(new Set(ids)))
-      .catch((error) => console.error("failed to list cached assets", error));
+    getSelectedRelease(projectKey)
+      .then(setSelectedReleaseTagState)
+      .catch((error) => console.error("failed to load selected release", error));
+    getTickedConfigs(projectKey)
+      .then(setTickedConfigsState)
+      .catch((error) => console.error("failed to load ticked configs", error));
   }, [projectKey]);
 
-  // Picking an option activates it: download/verify every build type of
-  // that release (so switching build type later, for the same CL, is
-  // already cached), then extract the selected one as the active build.
-  // Only mark it active if the sync actually completed -- `sync()`
-  // resolves false (without throwing) if it was skipped because another
-  // operation was already in flight.
-  const handleSelect = async (release: Release, assetId: number) => {
-    const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
-
-    for (const other of release.assets) {
-      if (other.id === assetId) {
-        continue;
-      }
-      try {
-        const cached = await check(other);
-        if (cached) {
-          setCachedAssetIds((prev) => new Set(prev).add(other.id));
-        }
-      } catch (error) {
-        console.error(`failed to download build type ${other.name}`, error);
-      }
-    }
-
-    let succeeded = false;
-    try {
-      succeeded = await sync(release, asset);
-    } catch (error) {
-      console.error("failed to sync/activate build", error);
+  useEffect(() => {
+    if (!selectedReleaseTag) {
+      setSyncedConfigs([]);
       return;
     }
-    if (!succeeded) {
-      return;
-    }
-    setActiveReleaseTag(release.tag_name);
-    setActiveAssetName(asset.name);
-    setCachedAssetIds((prev) => new Set(prev).add(assetId));
-    try {
-      setActiveExecutable(await getActiveExecutable(projectKey));
-    } catch (error) {
-      console.error("failed to look up active executable", error);
-    }
-    try {
-      setActiveBuildDir(await getActiveBuildDir(projectKey));
-    } catch (error) {
-      console.error("failed to look up active build dir", error);
-    }
-  };
+    listSyncedConfigs(projectKey, selectedReleaseTag)
+      .then(setSyncedConfigs)
+      .catch((error) => console.error("failed to list synced configs", error));
+  }, [projectKey, selectedReleaseTag]);
 
-  // Sync/Check only ensures a valid cached copy exists -- it never touches
-  // the active build.
-  const handleCheck = async (release: Release, assetId: number) => {
-    const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
-    try {
-      const succeeded = await check(asset);
-      if (succeeded) {
-        setCachedAssetIds((prev) => new Set(prev).add(assetId));
-      }
-    } catch (error) {
-      console.error("failed to check/download build", error);
-    }
-  };
-
-  const handleDelete = async (release: Release, assetId: number) => {
-    const asset = release.assets.find((a) => a.id === assetId) as ReleaseAsset;
-    try {
-      await deleteCachedAsset(projectKey, assetId, asset.name);
-      setCachedAssetIds((prev) => {
-        const next = new Set(prev);
-        next.delete(assetId);
-        return next;
-      });
-    } catch (error) {
-      console.error("failed to delete cached asset", error);
-    }
-  };
-
-  const handlePlay = async () => {
-    setLaunchError(null);
-    try {
-      await launchActiveBuild(projectKey);
-    } catch (error) {
-      setLaunchError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const handleOpenFolder = async () => {
-    setOpenFolderError(null);
-    if (!activeBuildDir) {
-      return;
-    }
-    try {
-      await openPath(activeBuildDir);
-    } catch (error) {
-      setOpenFolderError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  // Nothing here is safe to act on mid-download/check: a build type switch
-  // or delete could race the in-flight extraction, and the active build/
-  // its folder may be mid-write.
   const isBusy = state.phase === "syncing";
 
+  const handleSelectRelease = (tag: string) => {
+    setSelectedReleaseTagState(tag);
+    setSelectedRelease(projectKey, tag).catch((error) =>
+      console.error("failed to persist selected release", error),
+    );
+  };
+
+  const handleToggleConfig = (configName: string, ticked: boolean) => {
+    setTickedConfigsState((prev) => {
+      const next = ticked ? [...prev, configName] : prev.filter((c) => c !== configName);
+      setTickedConfigs(projectKey, next).catch((error) =>
+        console.error("failed to persist ticked configs", error),
+      );
+      return next;
+    });
+  };
+
+  const handleSync = async (release: Release, assets: ReleaseAsset[]) => {
+    let succeeded = false;
+    try {
+      succeeded = await syncConfigs(release, assets);
+    } catch (error) {
+      console.error("failed to sync build configs", error);
+      return;
+    }
+    if (succeeded && selectedReleaseTag === release.tag_name) {
+      try {
+        setSyncedConfigs(await listSyncedConfigs(projectKey, release.tag_name));
+      } catch (error) {
+        console.error("failed to refresh synced configs", error);
+      }
+    }
+  };
+
+  const busyLabel =
+    state.phase === "syncing"
+      ? state.downloaded >= state.total
+        ? `Finishing up ${state.configName}...`
+        : `Downloading ${state.configName}: ${Math.round((state.downloaded / state.total) * 100)}%`
+      : undefined;
+
   return (
-    <div>
-      <SyncStatus state={state} />
-      {(activeExecutable || activeBuildDir) && (
-        <div>
-          {activeExecutable && (
-            <button onClick={handlePlay} disabled={isBusy}>
-              Play
-            </button>
-          )}
-          {activeBuildDir && (
-            <button onClick={handleOpenFolder} disabled={isBusy}>
-              Open Folder
-            </button>
-          )}
-          {launchError && <p>Failed to launch: {launchError}</p>}
-          {openFolderError && <p>Failed to open folder: {openFolderError}</p>}
-        </div>
-      )}
-      <ReleaseList
-        releases={releases}
-        activeReleaseTag={activeReleaseTag}
-        activeAssetName={activeAssetName}
-        cachedAssetIds={cachedAssetIds}
-        disabled={isBusy}
-        onSelect={handleSelect}
-        onCheck={handleCheck}
-        onDelete={handleDelete}
-      />
+    <div className="project-detail">
+      <BusyOverlay active={isBusy} label={busyLabel}>
+        <BuildBrowser
+          releases={releases}
+          selectedReleaseTag={selectedReleaseTag}
+          onSelectRelease={handleSelectRelease}
+          tickedConfigs={tickedConfigs}
+          onToggleConfig={handleToggleConfig}
+          syncedConfigs={syncedConfigs}
+          onSync={handleSync}
+          disabled={isBusy}
+        />
+        <SyncStatus state={state} />
+        {selectedReleaseTag && syncedConfigs.length > 0 && (
+          <div className="synced-builds">
+            {syncedConfigs.map((config) => (
+              <SyncedBuildControls
+                key={config}
+                projectKey={projectKey}
+                releaseTag={selectedReleaseTag}
+                configName={config}
+                disabled={isBusy}
+              />
+            ))}
+          </div>
+        )}
+      </BusyOverlay>
       <ClearCacheButton
         projectKey={projectKey}
-        onCleared={() => setCachedAssetIds(new Set())}
+        onCleared={() => setSyncedConfigs([])}
         disabled={isBusy}
       />
     </div>
@@ -197,8 +137,11 @@ function App() {
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const [workspaceRoot, setWorkspaceRootState] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [boundKeys, setBoundKeys] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [showBindPopup, setShowBindPopup] = useState(false);
   const [versionLabel, setVersionLabel] = useState<string | null>(null);
+  const { theme, setTheme } = useTheme();
 
   useEffect(() => {
     getVersionLabel()
@@ -218,7 +161,18 @@ function App() {
         .then(setWorkspaceRootState)
         .catch((error) => console.error("failed to load workspace root", error));
       listProjects()
-        .then(setProjects)
+        .then((data) => {
+          setProjects(data);
+          listBoundProjects()
+            .then((keys) => {
+              setBoundKeys(keys);
+              // Land on the first bound tab by default, rather than an
+              // empty pane, on every fresh load -- but never override a
+              // tab the user already picked this session.
+              setActiveTab((prev) => prev ?? keys[0] ?? null);
+            })
+            .catch((error) => console.error("failed to load bound projects", error));
+        })
         .catch((error) => {
           if (error === SESSION_EXPIRED_ERROR) {
             setLoggedIn(false);
@@ -238,40 +192,85 @@ function App() {
     }
   };
 
+  const handleBind = async (fullName: string) => {
+    try {
+      await bindProject(fullName);
+      setBoundKeys((prev) => [...prev, fullName]);
+      setActiveTab(fullName);
+      setShowBindPopup(false);
+    } catch (error) {
+      console.error("failed to bind project", error);
+    }
+  };
+
+  const handleUnbind = async (fullName: string) => {
+    try {
+      await unbindProject(fullName);
+      setBoundKeys((prev) => prev.filter((key) => key !== fullName));
+      setActiveTab((prev) => (prev === fullName ? null : prev));
+    } catch (error) {
+      console.error("failed to unbind project", error);
+    }
+  };
+
   const handleLoggedIn = useCallback(() => setLoggedIn(true), []);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      setLoggedIn(false);
+    } catch (error) {
+      console.error("failed to log out", error);
+    }
+  };
 
   let content: ReactNode;
   if (loggedIn === null) {
-    content = <p>Loading...</p>;
+    content = (
+      <div className="centered-screen">
+        <p className="centered-card__lede">Loading...</p>
+      </div>
+    );
   } else if (!loggedIn) {
     content = <Login onLoggedIn={handleLoggedIn} />;
   } else if (!workspaceRoot) {
     content = <WorkspaceSetup onSet={setWorkspaceRootState} />;
   } else {
     content = (
-      <div>
-        <button
-          onClick={async () => {
-            try {
-              await logout();
-              setLoggedIn(false);
-            } catch (error) {
-              console.error("failed to log out", error);
-            }
-          }}
-        >
-          Log out
-        </button>
-        <ProjectList projects={projects} onSelect={setSelectedProject} onToggleFavorite={handleToggleFavorite} />
-        {selectedProject && <ProjectDetail key={selectedProject} projectKey={selectedProject} />}
+      <div className="main-view">
+        <div className="top-bar">
+          <TabBar
+            projects={projects}
+            boundKeys={boundKeys}
+            activeKey={activeTab}
+            onSelect={setActiveTab}
+            onUnbind={handleUnbind}
+            onRequestBind={() => setShowBindPopup(true)}
+          />
+          <ThemeToggle theme={theme} onChange={setTheme} />
+          <button onClick={handleLogout}>Log out</button>
+        </div>
+        {showBindPopup && (
+          <BindProjectPopup
+            projects={projects.filter((p) => !boundKeys.includes(p.full_name))}
+            onBind={handleBind}
+            onToggleFavorite={handleToggleFavorite}
+            onClose={() => setShowBindPopup(false)}
+          />
+        )}
+        {activeTab ? (
+          <ProjectDetail key={activeTab} projectKey={activeTab} />
+        ) : (
+          <p className="empty-state">Bind a project to get started.</p>
+        )}
       </div>
     );
   }
 
   return (
-    <div>
-      {content}
-      <footer>{versionLabel}</footer>
+    <div className="app-shell">
+      <div className="app-content">{content}</div>
+      <footer className="app-footer">{versionLabel}</footer>
     </div>
   );
 }

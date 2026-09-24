@@ -36,8 +36,44 @@ pub fn cache_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
     project_dir(workspace_root, project_key).join("cache")
 }
 
-pub fn active_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
-    project_dir(workspace_root, project_key).join("active")
+pub fn builds_root_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
+    project_dir(workspace_root, project_key).join("builds")
+}
+
+/// Replaces characters that are invalid (or awkward) as a single Windows
+/// path component with `_`. Needed for both a release's git tag (which can
+/// legally contain `/`, e.g. `"release/1.2.3"`) and a release asset's name
+/// (`config_name`) -- both are GitHub-controlled data (a tag can be
+/// free-text on an unpublished draft release; an asset can be renamed by
+/// anyone with push access, or a compromised/malicious upstream) being used
+/// as a bare directory *component* for the first time in `build_config_dir`,
+/// rather than passed through verbatim to GitHub's API. Replacing `:` and
+/// `\` also neutralizes a Windows drive-letter (`C:\...`) or UNC (`\\server\
+/// share\...`) prefix, which `Path::join` would otherwise treat as replacing
+/// the base path entirely rather than nesting under it.
+fn sanitize_path_component(value: &str) -> String {
+    if value == "." || value == ".." {
+        return "_".to_string();
+    }
+    value
+        .chars()
+        .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .collect()
+}
+
+/// The extraction directory for one (release, build config) pair. Each pair
+/// gets its own folder so multiple configs -- even across different
+/// releases -- can be extracted and coexist on disk at once, rather than the
+/// single `active/` folder every sync used to atomically replace.
+pub fn build_config_dir(
+    workspace_root: &Path,
+    project_key: &str,
+    release_tag: &str,
+    config_name: &str,
+) -> PathBuf {
+    builds_root_dir(workspace_root, project_key)
+        .join(sanitize_path_component(release_tag))
+        .join(sanitize_path_component(config_name))
 }
 
 pub fn cached_asset_path(
@@ -46,31 +82,39 @@ pub fn cached_asset_path(
     asset_id: u64,
     asset_name: &str,
 ) -> PathBuf {
-    cache_dir(workspace_root, project_key).join(format!("{}-{}", asset_id, asset_name))
+    cache_dir(workspace_root, project_key).join(format!(
+        "{}-{}",
+        asset_id,
+        sanitize_path_component(asset_name)
+    ))
 }
 
-/// Lists the asset IDs currently present in `project_key`'s cache dir, read
-/// back from the `<id>-<name>` file-naming scheme `cached_asset_path` writes.
-/// Returns an empty list (not an error) when the cache dir doesn't exist yet,
-/// since "no cache dir" and "empty cache dir" mean the same thing to callers.
-pub fn list_cached_asset_ids(workspace_root: &Path, project_key: &str) -> io::Result<Vec<u64>> {
-    let dir = cache_dir(workspace_root, project_key);
+/// Lists the build-config names currently extracted for `release_tag`, read
+/// back as directory names under that release's folder. Returns an empty
+/// list (not an error) when nothing has been synced for this release yet --
+/// "no builds dir for this release" and "nothing synced" mean the same thing
+/// to callers.
+pub fn list_synced_configs(
+    workspace_root: &Path,
+    project_key: &str,
+    release_tag: &str,
+) -> io::Result<Vec<String>> {
+    let dir =
+        builds_root_dir(workspace_root, project_key).join(sanitize_path_component(release_tag));
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut ids = Vec::new();
+    let mut configs = Vec::new();
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
-        if let Some(name) = entry.file_name().to_str() {
-            if let Some((id_str, _)) = name.split_once('-') {
-                if let Ok(id) = id_str.parse::<u64>() {
-                    ids.push(id);
-                }
+        if entry.file_type()?.is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                configs.push(name.to_string());
             }
         }
     }
-    Ok(ids)
+    Ok(configs)
 }
 
 #[cfg(test)]
@@ -107,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_and_active_dirs_are_siblings_under_the_project_dir() {
+    fn cache_and_builds_root_dirs_are_siblings_under_the_project_dir() {
         let root = Path::new("D:\\Builds");
 
         assert_eq!(
@@ -115,8 +159,8 @@ mod tests {
             PathBuf::from("D:\\Builds\\org\\repo\\cache")
         );
         assert_eq!(
-            active_dir(root, "org/repo"),
-            PathBuf::from("D:\\Builds\\org\\repo\\active")
+            builds_root_dir(root, "org/repo"),
+            PathBuf::from("D:\\Builds\\org\\repo\\builds")
         );
     }
 
@@ -133,26 +177,109 @@ mod tests {
     }
 
     #[test]
-    fn list_cached_asset_ids_reads_ids_from_cache_file_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let cache = cache_dir(root, "org/repo");
-        fs::create_dir_all(&cache).unwrap();
-        fs::write(cache.join("42-build-shipping.zip"), b"data").unwrap();
-        fs::write(cache.join("7-build-test.tar.gz"), b"data").unwrap();
+    fn build_config_dir_nests_release_then_config_under_builds() {
+        let root = Path::new("D:\\Builds");
 
-        let mut ids = list_cached_asset_ids(root, "org/repo").unwrap();
-        ids.sort();
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "shipping.zip");
 
-        assert_eq!(ids, vec![7, 42]);
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\shipping.zip")
+        );
     }
 
     #[test]
-    fn list_cached_asset_ids_returns_empty_when_cache_dir_is_missing() {
+    fn build_config_dir_sanitizes_slashes_in_the_release_tag() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "release/1.2.3", "shipping.zip");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\release_1.2.3\\shipping.zip")
+        );
+    }
+
+    #[test]
+    fn build_config_dir_sanitizes_a_release_tag_that_is_exactly_dot_dot() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "..", "shipping.zip");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\_\\shipping.zip")
+        );
+    }
+
+    // A release asset's name is GitHub-controlled data (renamable by anyone
+    // with push access to the repo, not just this app's user), so it needs
+    // exactly the same defense the release tag already gets -- otherwise a
+    // hostile config_name could delete/replace an arbitrary directory (see
+    // the two cases below) rather than just this project's own builds/.
+    #[test]
+    fn build_config_dir_sanitizes_a_config_name_that_is_exactly_dot_dot() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "..");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\_")
+        );
+    }
+
+    #[test]
+    fn build_config_dir_sanitizes_a_config_name_shaped_like_an_absolute_windows_path() {
+        let root = Path::new("D:\\Builds");
+
+        // Without sanitization, `Path::join` treats a drive-letter-prefixed
+        // argument as replacing the base path entirely rather than nesting
+        // under it -- this proves that can no longer happen.
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "C:\\Windows\\System32");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\C__Windows_System32")
+        );
+    }
+
+    #[test]
+    fn build_config_dir_sanitizes_a_config_name_shaped_like_a_unc_path() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "\\\\server\\share");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\__server_share")
+        );
+    }
+
+    #[test]
+    fn list_synced_configs_returns_empty_when_the_release_has_nothing_synced() {
         let dir = tempfile::tempdir().unwrap();
 
-        let ids = list_cached_asset_ids(dir.path(), "org/repo").unwrap();
+        let configs = list_synced_configs(dir.path(), "org/repo", "0.2.14").unwrap();
 
-        assert!(ids.is_empty());
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn list_synced_configs_lists_every_extracted_config_for_that_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(build_config_dir(root, "org/repo", "0.2.14", "shipping.zip")).unwrap();
+        fs::create_dir_all(build_config_dir(root, "org/repo", "0.2.14", "test.zip")).unwrap();
+        // A different release's configs must not leak into this release's list.
+        fs::create_dir_all(build_config_dir(root, "org/repo", "0.2.13", "shipping.zip")).unwrap();
+
+        let mut configs = list_synced_configs(root, "org/repo", "0.2.14").unwrap();
+        configs.sort();
+
+        assert_eq!(
+            configs,
+            vec!["shipping.zip".to_string(), "test.zip".to_string()]
+        );
     }
 }

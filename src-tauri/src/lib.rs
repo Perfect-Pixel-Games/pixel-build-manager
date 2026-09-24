@@ -11,13 +11,13 @@ use auth::session::ensure_valid_access_token;
 use auth::token_store::{KeyringTokenStore, TokenStore};
 use github::client::{GithubClient, ReleaseSummary};
 use serde::Serialize;
-use settings::Settings;
+use settings::{Settings, Theme};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use sync::cache::{active_dir, cache_dir, cached_asset_path, list_cached_asset_ids};
-use sync::launch::{find_active_executable, launch_executable};
-use sync::orchestrator::{ensure_asset_cached, sync_asset, SyncRequest};
+use sync::cache::{build_config_dir, builds_root_dir, cache_dir};
+use sync::launch::{find_build_executable, launch_executable};
+use sync::orchestrator::{sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
 use updater::channel::Channel;
 use updater::start_background_updates;
@@ -65,6 +65,12 @@ fn settings_path_for(app: &tauri::AppHandle) -> PathBuf {
         .app_data_dir()
         .expect("app data dir must be resolvable")
         .join("settings.json")
+}
+
+fn workspace_root_from_settings(state: &AppState) -> Result<PathBuf, String> {
+    Settings::load_from(&state.settings_path)
+        .workspace_root
+        .ok_or_else(|| "workspace root not set".to_string())
 }
 
 #[tauri::command]
@@ -199,6 +205,110 @@ fn set_workspace_root(root: String, state: tauri::State<'_, AppState>) -> Result
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn list_bound_projects(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(Settings::load_from(&state.settings_path).bound_projects)
+}
+
+#[tauri::command]
+fn bind_project(full_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.bind_project(&full_name);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn unbind_project(full_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.unbind_project(&full_name);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_theme(state: tauri::State<'_, AppState>) -> Theme {
+    Settings::load_from(&state.settings_path).theme
+}
+
+#[tauri::command]
+fn set_theme(theme: Theme, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_theme(theme);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_selected_release(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .projects
+        .get(&project_key)
+        .and_then(|p| p.selected_release_tag.clone()))
+}
+
+#[tauri::command]
+fn set_selected_release(
+    project_key: String,
+    release_tag: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_selected_release(&project_key, &release_tag);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_ticked_configs(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .projects
+        .get(&project_key)
+        .map(|p| p.ticked_configs.clone())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn set_ticked_configs(
+    project_key: String,
+    configs: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.set_ticked_configs(&project_key, configs);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_synced_configs(
+    project_key: String,
+    release_tag: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    sync::cache::list_synced_configs(&workspace_root, &project_key, &release_tag)
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct SyncProgressPayload {
     project_key: String,
@@ -246,11 +356,7 @@ async fn sync_release_asset_inner(
     asset_size: u64,
     state: &AppState,
 ) -> Result<(), String> {
-    let settings = Settings::load_from(&state.settings_path);
-    let workspace_root = settings
-        .workspace_root
-        .clone()
-        .ok_or_else(|| "workspace root not set".to_string())?;
+    let workspace_root = workspace_root_from_settings(state)?;
 
     let client = build_github_client(state).await?;
     let (owner, repo) = project_key
@@ -263,6 +369,7 @@ async fn sync_release_asset_inner(
     let request = SyncRequest {
         workspace_root: &workspace_root,
         project_key,
+        release_tag,
         asset_id,
         asset_name,
         asset_size,
@@ -282,100 +389,7 @@ async fn sync_release_asset_inner(
         );
     })
     .await
-    .map_err(|e| e.to_string())?;
-
-    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
-    let mut settings = Settings::load_from(&state.settings_path);
-    settings.set_active_release(project_key, release_tag, asset_name);
-    settings.save_to(&state.settings_path).map_err(|e| {
-        format!(
-            "build was downloaded and installed, but failed to record it as the active \
-             release ({e}) -- try syncing again"
-        )
-    })
-}
-
-// Downloads/verifies the asset into the cache, same as sync_release_asset,
-// but never extracts it into the active build dir or records it as active --
-// this is the "Check"/"Sync" button's action, kept deliberately separate
-// from picking an option (which does activate it).
-#[tauri::command]
-async fn check_release_asset(
-    app: tauri::AppHandle,
-    project_key: String,
-    asset_id: u64,
-    asset_name: String,
-    asset_size: u64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    begin_operation(&state, &project_key)?;
-    let result =
-        check_release_asset_inner(app, &project_key, asset_id, &asset_name, asset_size, &state)
-            .await;
-    end_operation(&state, &project_key);
-    result
-}
-
-async fn check_release_asset_inner(
-    app: tauri::AppHandle,
-    project_key: &str,
-    asset_id: u64,
-    asset_name: &str,
-    asset_size: u64,
-    state: &AppState,
-) -> Result<(), String> {
-    let workspace_root = workspace_root_from_settings(state)?;
-
-    let client = build_github_client(state).await?;
-    let (owner, repo) = project_key
-        .split_once('/')
-        .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
-    let download_url = client.asset_download_url(owner, repo, asset_id);
-    let auth_token = client.token();
-
-    let http = reqwest::Client::new();
-    let request = SyncRequest {
-        workspace_root: &workspace_root,
-        project_key,
-        asset_id,
-        asset_name,
-        asset_size,
-        download_url: &download_url,
-        auth_token,
-    };
-
-    let project_key_for_events = project_key.to_string();
-    ensure_asset_cached(&http, request, move |downloaded, total| {
-        let _ = app.emit(
-            "sync-progress",
-            SyncProgressPayload {
-                project_key: project_key_for_events.clone(),
-                downloaded,
-                total,
-            },
-        );
-    })
-    .await
     .map_err(|e| e.to_string())
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ActiveRelease {
-    release_tag: Option<String>,
-    asset_name: Option<String>,
-}
-
-#[tauri::command]
-fn get_active_release(
-    project_key: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<ActiveRelease, String> {
-    let settings = Settings::load_from(&state.settings_path);
-    let project = settings.projects.get(&project_key);
-    Ok(ActiveRelease {
-        release_tag: project.and_then(|p| p.active_release_tag.clone()),
-        asset_name: project.and_then(|p| p.active_asset_name.clone()),
-    })
 }
 
 #[tauri::command]
@@ -389,98 +403,61 @@ fn clear_project_cache(
     result
 }
 
+// Clears everything this project has on disk: the raw downloaded cache
+// *and* every extracted release/config build under `builds/`. There's no
+// separate "clear builds" affordance, since leaving extracted builds behind
+// after a cache clear would contradict "manually cleared" -- the one button
+// is the manual-clear mechanism for the whole project's disk footprint.
 fn clear_project_cache_inner(project_key: &str, state: &AppState) -> Result<(), String> {
-    let settings = Settings::load_from(&state.settings_path);
-    let workspace_root = settings
-        .workspace_root
-        .ok_or_else(|| "workspace root not set".to_string())?;
-    let dir = cache_dir(&workspace_root, project_key);
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    let workspace_root = workspace_root_from_settings(state)?;
+
+    let cache = cache_dir(&workspace_root, project_key);
+    if cache.exists() {
+        std::fs::remove_dir_all(&cache).map_err(|e| e.to_string())?;
+    }
+    let builds = builds_root_dir(&workspace_root, project_key);
+    if builds.exists() {
+        std::fs::remove_dir_all(&builds).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn list_cached_assets(
+fn get_build_executable(
     project_key: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<u64>, String> {
-    let settings = Settings::load_from(&state.settings_path);
-    let workspace_root = settings
-        .workspace_root
-        .ok_or_else(|| "workspace root not set".to_string())?;
-    list_cached_asset_ids(&workspace_root, &project_key).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn delete_cached_asset(
-    project_key: String,
-    asset_id: u64,
-    asset_name: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    begin_operation(&state, &project_key)?;
-    let result = delete_cached_asset_inner(&project_key, asset_id, &asset_name, &state);
-    end_operation(&state, &project_key);
-    result
-}
-
-fn delete_cached_asset_inner(
-    project_key: &str,
-    asset_id: u64,
-    asset_name: &str,
-    state: &AppState,
-) -> Result<(), String> {
-    let settings = Settings::load_from(&state.settings_path);
-    let workspace_root = settings
-        .workspace_root
-        .ok_or_else(|| "workspace root not set".to_string())?;
-    let path = cached_asset_path(&workspace_root, project_key, asset_id, asset_name);
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-fn workspace_root_from_settings(state: &AppState) -> Result<PathBuf, String> {
-    Settings::load_from(&state.settings_path)
-        .workspace_root
-        .ok_or_else(|| "workspace root not set".to_string())
-}
-
-#[tauri::command]
-fn get_active_executable(
-    project_key: String,
+    release_tag: String,
+    config_name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let workspace_root = workspace_root_from_settings(&state)?;
-    let active = active_dir(&workspace_root, &project_key);
-    Ok(find_active_executable(&active).map(|p| p.to_string_lossy().to_string()))
+    let dir = build_config_dir(&workspace_root, &project_key, &release_tag, &config_name);
+    Ok(find_build_executable(&dir).map(|p| p.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
-fn launch_active_build(
+fn launch_build(
     project_key: String,
+    release_tag: String,
+    config_name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let workspace_root = workspace_root_from_settings(&state)?;
-    let active = active_dir(&workspace_root, &project_key);
-    let exe = find_active_executable(&active)
-        .ok_or_else(|| "no executable found in the active build".to_string())?;
+    let dir = build_config_dir(&workspace_root, &project_key, &release_tag, &config_name);
+    let exe = find_build_executable(&dir)
+        .ok_or_else(|| "no executable found in this build".to_string())?;
     launch_executable(&exe).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_active_build_dir(
+fn get_build_dir(
     project_key: String,
+    release_tag: String,
+    config_name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let workspace_root = workspace_root_from_settings(&state)?;
-    let active = active_dir(&workspace_root, &project_key);
-    Ok(active
-        .exists()
-        .then(|| active.to_string_lossy().to_string()))
+    let dir = build_config_dir(&workspace_root, &project_key, &release_tag, &config_name);
+    Ok(dir.exists().then(|| dir.to_string_lossy().to_string()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -513,15 +490,21 @@ pub fn run() {
             toggle_favorite,
             get_workspace_root,
             set_workspace_root,
+            list_bound_projects,
+            bind_project,
+            unbind_project,
+            get_theme,
+            set_theme,
+            get_selected_release,
+            set_selected_release,
+            get_ticked_configs,
+            set_ticked_configs,
+            list_synced_configs,
             sync_release_asset,
-            check_release_asset,
-            get_active_release,
             clear_project_cache,
-            list_cached_assets,
-            delete_cached_asset,
-            get_active_executable,
-            launch_active_build,
-            get_active_build_dir,
+            get_build_executable,
+            launch_build,
+            get_build_dir,
             get_version_label
         ])
         .run(tauri::generate_context!())

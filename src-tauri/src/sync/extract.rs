@@ -39,11 +39,11 @@ fn detect_archive_kind(archive_path: &Path) -> Result<ArchiveKind, ExtractError>
 }
 
 /// Extracts a release asset (`.zip` or `.tar.gz`, auto-detected from its
-/// content) into `active_dir`, replacing whatever was there before.
-pub fn extract_to_active(archive_path: &Path, active_dir: &Path) -> Result<(), ExtractError> {
+/// content) into `target_dir`, replacing whatever was there before.
+pub fn extract_archive(archive_path: &Path, target_dir: &Path) -> Result<(), ExtractError> {
     match detect_archive_kind(archive_path)? {
-        ArchiveKind::Zip => extract_zip_to_active(archive_path, active_dir),
-        ArchiveKind::TarGz => extract_tar_gz_to_active(archive_path, active_dir),
+        ArchiveKind::Zip => extract_zip(archive_path, target_dir),
+        ArchiveKind::TarGz => extract_tar_gz(archive_path, target_dir),
     }
 }
 
@@ -55,11 +55,8 @@ fn is_contained(path: &Path) -> bool {
         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
-pub fn extract_tar_gz_to_active(
-    archive_path: &Path,
-    active_dir: &Path,
-) -> Result<(), ExtractError> {
-    let temp_dir = active_dir.with_extension("tmp-extract");
+pub fn extract_tar_gz(archive_path: &Path, target_dir: &Path) -> Result<(), ExtractError> {
+    let temp_dir = target_dir.with_extension("tmp-extract");
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir)?;
     }
@@ -92,16 +89,16 @@ pub fn extract_tar_gz_to_active(
         // calls a symlink-creation API either.
     }
 
-    if active_dir.exists() {
-        fs::remove_dir_all(active_dir)?;
+    if target_dir.exists() {
+        fs::remove_dir_all(target_dir)?;
     }
-    fs::rename(&temp_dir, active_dir)?;
+    fs::rename(&temp_dir, target_dir)?;
 
     Ok(())
 }
 
-pub fn extract_zip_to_active(zip_path: &Path, active_dir: &Path) -> Result<(), ExtractError> {
-    let temp_dir = active_dir.with_extension("tmp-extract");
+pub fn extract_zip(zip_path: &Path, target_dir: &Path) -> Result<(), ExtractError> {
+    let temp_dir = target_dir.with_extension("tmp-extract");
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir)?;
     }
@@ -128,10 +125,10 @@ pub fn extract_zip_to_active(zip_path: &Path, active_dir: &Path) -> Result<(), E
         }
     }
 
-    if active_dir.exists() {
-        fs::remove_dir_all(active_dir)?;
+    if target_dir.exists() {
+        fs::remove_dir_all(target_dir)?;
     }
-    fs::rename(&temp_dir, active_dir)?;
+    fs::rename(&temp_dir, target_dir)?;
 
     Ok(())
 }
@@ -202,80 +199,80 @@ mod tests {
     }
 
     #[test]
-    fn extracts_zip_contents_into_the_active_dir() {
+    fn extracts_zip_contents_into_the_target_dir() {
         let dir = tempfile::tempdir().unwrap();
         let zip_path = dir.path().join("build.zip");
         write_test_zip(
             &zip_path,
             &[("game.exe", "binary-contents"), ("readme.txt", "hello")],
         );
-        let active_dir = dir.path().join("active");
+        let target_dir = dir.path().join("target");
 
-        extract_zip_to_active(&zip_path, &active_dir).unwrap();
+        extract_zip(&zip_path, &target_dir).unwrap();
 
         assert_eq!(
-            fs::read_to_string(active_dir.join("readme.txt")).unwrap(),
+            fs::read_to_string(target_dir.join("readme.txt")).unwrap(),
             "hello"
         );
         assert_eq!(
-            fs::read_to_string(active_dir.join("game.exe")).unwrap(),
+            fs::read_to_string(target_dir.join("game.exe")).unwrap(),
             "binary-contents"
         );
     }
 
     #[test]
-    fn replaces_a_pre_existing_active_dir_entirely() {
+    fn replaces_a_pre_existing_target_dir_entirely() {
         let dir = tempfile::tempdir().unwrap();
-        let active_dir = dir.path().join("active");
-        fs::create_dir_all(&active_dir).unwrap();
-        fs::write(active_dir.join("stale-file.txt"), "old build").unwrap();
+        let target_dir = dir.path().join("target");
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(target_dir.join("stale-file.txt"), "old build").unwrap();
 
         let zip_path = dir.path().join("build.zip");
         write_test_zip(&zip_path, &[("new-file.txt", "new build")]);
 
-        extract_zip_to_active(&zip_path, &active_dir).unwrap();
+        extract_zip(&zip_path, &target_dir).unwrap();
 
-        assert!(!active_dir.join("stale-file.txt").exists());
+        assert!(!target_dir.join("stale-file.txt").exists());
         assert_eq!(
-            fs::read_to_string(active_dir.join("new-file.txt")).unwrap(),
+            fs::read_to_string(target_dir.join("new-file.txt")).unwrap(),
             "new build"
         );
     }
 
     #[test]
-    fn extracts_tar_gz_contents_into_the_active_dir() {
+    fn extracts_tar_gz_contents_into_the_target_dir() {
         let dir = tempfile::tempdir().unwrap();
         let archive_path = dir.path().join("build.tar.gz");
         write_test_tar_gz(&archive_path, &["game.exe", "readme.txt"]);
-        let active_dir = dir.path().join("active");
+        let target_dir = dir.path().join("target");
 
-        extract_tar_gz_to_active(&archive_path, &active_dir).unwrap();
+        extract_tar_gz(&archive_path, &target_dir).unwrap();
 
         assert_eq!(
-            fs::read_to_string(active_dir.join("readme.txt")).unwrap(),
+            fs::read_to_string(target_dir.join("readme.txt")).unwrap(),
             "contents of readme.txt"
         );
         assert_eq!(
-            fs::read_to_string(active_dir.join("game.exe")).unwrap(),
+            fs::read_to_string(target_dir.join("game.exe")).unwrap(),
             "contents of game.exe"
         );
     }
 
     #[test]
-    fn tar_gz_replaces_a_pre_existing_active_dir_entirely() {
+    fn tar_gz_replaces_a_pre_existing_target_dir_entirely() {
         let dir = tempfile::tempdir().unwrap();
-        let active_dir = dir.path().join("active");
-        fs::create_dir_all(&active_dir).unwrap();
-        fs::write(active_dir.join("stale-file.txt"), "old build").unwrap();
+        let target_dir = dir.path().join("target");
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(target_dir.join("stale-file.txt"), "old build").unwrap();
 
         let archive_path = dir.path().join("build.tar.gz");
         write_test_tar_gz(&archive_path, &["new-file.txt"]);
 
-        extract_tar_gz_to_active(&archive_path, &active_dir).unwrap();
+        extract_tar_gz(&archive_path, &target_dir).unwrap();
 
-        assert!(!active_dir.join("stale-file.txt").exists());
+        assert!(!target_dir.join("stale-file.txt").exists());
         assert_eq!(
-            fs::read_to_string(active_dir.join("new-file.txt")).unwrap(),
+            fs::read_to_string(target_dir.join("new-file.txt")).unwrap(),
             "contents of new-file.txt"
         );
     }
@@ -285,60 +282,60 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive_path = dir.path().join("evil.tar.gz");
         write_tar_gz_with_traversal_entry(&archive_path, "../escaped.txt", "safe.txt");
-        let active_dir = dir.path().join("active");
+        let target_dir = dir.path().join("target");
 
-        extract_tar_gz_to_active(&archive_path, &active_dir).unwrap();
+        extract_tar_gz(&archive_path, &target_dir).unwrap();
 
         // The malicious entry must not have escaped the extraction root.
         assert!(!dir.path().join("escaped.txt").exists());
-        assert!(!active_dir.join("../escaped.txt").exists());
+        assert!(!target_dir.join("../escaped.txt").exists());
         // The safe entry alongside it still extracts normally.
         assert_eq!(
-            fs::read_to_string(active_dir.join("safe.txt")).unwrap(),
+            fs::read_to_string(target_dir.join("safe.txt")).unwrap(),
             "contents of safe.txt"
         );
     }
 
     #[test]
-    fn extract_to_active_dispatches_zip_by_content_not_file_name() {
+    fn extract_archive_dispatches_zip_by_content_not_file_name() {
         let dir = tempfile::tempdir().unwrap();
         // Deliberately named without a .zip extension, to prove detection
         // is by magic bytes, not the file name.
         let archive_path = dir.path().join("asset-download");
         write_test_zip(&archive_path, &[("game.exe", "zip-contents")]);
-        let active_dir = dir.path().join("active");
+        let target_dir = dir.path().join("target");
 
-        extract_to_active(&archive_path, &active_dir).unwrap();
+        extract_archive(&archive_path, &target_dir).unwrap();
 
         assert_eq!(
-            fs::read_to_string(active_dir.join("game.exe")).unwrap(),
+            fs::read_to_string(target_dir.join("game.exe")).unwrap(),
             "zip-contents"
         );
     }
 
     #[test]
-    fn extract_to_active_dispatches_tar_gz_by_content_not_file_name() {
+    fn extract_archive_dispatches_tar_gz_by_content_not_file_name() {
         let dir = tempfile::tempdir().unwrap();
         let archive_path = dir.path().join("asset-download");
         write_test_tar_gz(&archive_path, &["game.exe"]);
-        let active_dir = dir.path().join("active");
+        let target_dir = dir.path().join("target");
 
-        extract_to_active(&archive_path, &active_dir).unwrap();
+        extract_archive(&archive_path, &target_dir).unwrap();
 
         assert_eq!(
-            fs::read_to_string(active_dir.join("game.exe")).unwrap(),
+            fs::read_to_string(target_dir.join("game.exe")).unwrap(),
             "contents of game.exe"
         );
     }
 
     #[test]
-    fn extract_to_active_reports_unsupported_format_for_unrecognized_bytes() {
+    fn extract_archive_reports_unsupported_format_for_unrecognized_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let archive_path = dir.path().join("not-an-archive");
         fs::write(&archive_path, b"just some plain text, not an archive").unwrap();
-        let active_dir = dir.path().join("active");
+        let target_dir = dir.path().join("target");
 
-        let result = extract_to_active(&archive_path, &active_dir);
+        let result = extract_archive(&archive_path, &target_dir);
 
         assert!(matches!(result, Err(ExtractError::UnsupportedFormat)));
     }

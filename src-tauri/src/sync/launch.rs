@@ -46,13 +46,13 @@ fn collect_exe_files(dir: &Path, depth: u32, out: &mut Vec<(u32, PathBuf)>) {
     }
 }
 
-/// Finds the executable an active build's "Play" button should launch: the
-/// shallowest `.exe` under `active_dir` (recursing into subfolders),
+/// Finds the executable a synced build's launch button should run: the
+/// shallowest `.exe` under `build_dir` (recursing into subfolders),
 /// preferring ones that don't look like bundled installer/crash-reporter
-/// tooling. Returns `None` if the active dir has no executables at all.
-pub fn find_active_executable(active_dir: &Path) -> Option<PathBuf> {
+/// tooling. Returns `None` if the build dir has no executables at all.
+pub fn find_build_executable(build_dir: &Path) -> Option<PathBuf> {
     let mut candidates = Vec::new();
-    collect_exe_files(active_dir, 0, &mut candidates);
+    collect_exe_files(build_dir, 0, &mut candidates);
     candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
     candidates
@@ -79,11 +79,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_an_exe_at_the_top_level_of_the_active_dir() {
+    fn finds_an_exe_at_the_top_level_of_the_build_dir() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("game.exe"), b"").unwrap();
 
-        let found = find_active_executable(dir.path()).unwrap();
+        let found = find_build_executable(dir.path()).unwrap();
 
         assert_eq!(found, dir.path().join("game.exe"));
     }
@@ -95,7 +95,7 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("MyGame.exe"), b"").unwrap();
 
-        let found = find_active_executable(dir.path()).unwrap();
+        let found = find_build_executable(dir.path()).unwrap();
 
         assert_eq!(found, nested.join("MyGame.exe"));
     }
@@ -108,7 +108,7 @@ mod tests {
         fs::write(dir.path().join("Crashpad.exe"), b"").unwrap();
         fs::write(dir.path().join("MyGame.exe"), b"").unwrap();
 
-        let found = find_active_executable(dir.path()).unwrap();
+        let found = find_build_executable(dir.path()).unwrap();
 
         assert_eq!(found, dir.path().join("MyGame.exe"));
     }
@@ -118,7 +118,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("readme.txt"), b"hi").unwrap();
 
-        assert!(find_active_executable(dir.path()).is_none());
+        assert!(find_build_executable(dir.path()).is_none());
     }
 
     #[test]
@@ -129,16 +129,16 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("Deeper.exe"), b"").unwrap();
 
-        let found = find_active_executable(dir.path()).unwrap();
+        let found = find_build_executable(dir.path()).unwrap();
 
         assert_eq!(found, dir.path().join("Launcher.exe"));
     }
 
     #[test]
-    fn returns_none_when_the_active_dir_does_not_exist() {
+    fn returns_none_when_the_build_dir_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");
 
-        assert!(find_active_executable(&missing).is_none());
+        assert!(find_build_executable(&missing).is_none());
     }
 }
