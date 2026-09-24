@@ -41,13 +41,16 @@ pub fn builds_root_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
 }
 
 /// Replaces characters that are invalid (or awkward) as a single Windows
-/// path component with `_`. Needed because -- unlike `owner`/`repo`, which
-/// GitHub guarantees are slash-free -- a release's git tag can legally
-/// contain `/` (e.g. `"release/1.2.3"`), and `build_config_dir` is the first
-/// place a tag is used as a bare directory name rather than passed through
-/// verbatim to GitHub's API. Asset/config names don't need this: they're
-/// already used unsanitized as filenames in `cached_asset_path` below, since
-/// GitHub-uploaded asset names can't contain path separators.
+/// path component with `_`. Needed for both a release's git tag (which can
+/// legally contain `/`, e.g. `"release/1.2.3"`) and a release asset's name
+/// (`config_name`) -- both are GitHub-controlled data (a tag can be
+/// free-text on an unpublished draft release; an asset can be renamed by
+/// anyone with push access, or a compromised/malicious upstream) being used
+/// as a bare directory *component* for the first time in `build_config_dir`,
+/// rather than passed through verbatim to GitHub's API. Replacing `:` and
+/// `\` also neutralizes a Windows drive-letter (`C:\...`) or UNC (`\\server\
+/// share\...`) prefix, which `Path::join` would otherwise treat as replacing
+/// the base path entirely rather than nesting under it.
 fn sanitize_path_component(value: &str) -> String {
     if value == "." || value == ".." {
         return "_".to_string();
@@ -70,7 +73,7 @@ pub fn build_config_dir(
 ) -> PathBuf {
     builds_root_dir(workspace_root, project_key)
         .join(sanitize_path_component(release_tag))
-        .join(config_name)
+        .join(sanitize_path_component(config_name))
 }
 
 pub fn cached_asset_path(
@@ -79,7 +82,11 @@ pub fn cached_asset_path(
     asset_id: u64,
     asset_name: &str,
 ) -> PathBuf {
-    cache_dir(workspace_root, project_key).join(format!("{}-{}", asset_id, asset_name))
+    cache_dir(workspace_root, project_key).join(format!(
+        "{}-{}",
+        asset_id,
+        sanitize_path_component(asset_name)
+    ))
 }
 
 /// Lists the build-config names currently extracted for `release_tag`, read
@@ -202,6 +209,50 @@ mod tests {
         assert_eq!(
             dir,
             PathBuf::from("D:\\Builds\\org\\repo\\builds\\_\\shipping.zip")
+        );
+    }
+
+    // A release asset's name is GitHub-controlled data (renamable by anyone
+    // with push access to the repo, not just this app's user), so it needs
+    // exactly the same defense the release tag already gets -- otherwise a
+    // hostile config_name could delete/replace an arbitrary directory (see
+    // the two cases below) rather than just this project's own builds/.
+    #[test]
+    fn build_config_dir_sanitizes_a_config_name_that_is_exactly_dot_dot() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "..");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\_")
+        );
+    }
+
+    #[test]
+    fn build_config_dir_sanitizes_a_config_name_shaped_like_an_absolute_windows_path() {
+        let root = Path::new("D:\\Builds");
+
+        // Without sanitization, `Path::join` treats a drive-letter-prefixed
+        // argument as replacing the base path entirely rather than nesting
+        // under it -- this proves that can no longer happen.
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "C:\\Windows\\System32");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\C__Windows_System32")
+        );
+    }
+
+    #[test]
+    fn build_config_dir_sanitizes_a_config_name_shaped_like_a_unc_path() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = build_config_dir(root, "org/repo", "0.2.14", "\\\\server\\share");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\builds\\0.2.14\\__server_share")
         );
     }
 
