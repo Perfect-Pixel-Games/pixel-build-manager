@@ -56,20 +56,36 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
   }, [projectKey]);
 
   useEffect(() => {
+    let cancelled = false;
+
     if (syncMode === "manual") {
       if (!selectedReleaseTag) {
         setSyncedConfigs([]);
         return;
       }
       listSyncedConfigs(projectKey, selectedReleaseTag)
-        .then(setSyncedConfigs)
+        .then((configs) => {
+          if (!cancelled) {
+            setSyncedConfigs(configs);
+          }
+        })
         .catch((error) => console.error("failed to list synced configs", error));
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
+
     const channel: LatestChannel = syncMode === "latest_prerelease" ? "prerelease" : "release";
     listSyncedLatestConfigs(projectKey, channel)
-      .then(setSyncedConfigs)
+      .then((configs) => {
+        if (!cancelled) {
+          setSyncedConfigs(configs);
+        }
+      })
       .catch((error) => console.error("failed to list synced latest configs", error));
+    return () => {
+      cancelled = true;
+    };
   }, [projectKey, syncMode, selectedReleaseTag, latestState.phase]);
 
   const isManualSyncing = state.phase === "syncing";

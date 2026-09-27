@@ -131,6 +131,38 @@ describe("ProjectDetail", () => {
     await waitFor(() => expect(syncApi.checkLatestNow).toHaveBeenCalledWith("org/repo"));
     expect(syncApi.syncReleaseAsset).not.toHaveBeenCalled();
   });
+
+  it("selecting Latest prerelease routes through the prerelease channel end to end", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.listSyncedLatestConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(
+      "D:\\Builds\\org\\repo\\latest\\prerelease\\shipping.zip",
+    );
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Latest prerelease" }));
+
+    await waitFor(() => expect(syncApi.setSyncMode).toHaveBeenCalledWith("org/repo", "latest_prerelease"));
+    await waitFor(() => expect(syncApi.listSyncedLatestConfigs).toHaveBeenCalledWith("org/repo", "prerelease"));
+    expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeInTheDocument();
+    expect(syncApi.getLatestBuildDir).toHaveBeenCalledWith("org/repo", "prerelease", "shipping.zip");
+  });
+
+  it("clicking a concrete release while in a latest mode resets sync mode back to manual", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSyncMode).mockResolvedValue("latest_release");
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "LastBeacon 0.2.14" }));
+
+    await waitFor(() => expect(syncApi.setSyncMode).toHaveBeenCalledWith("org/repo", "manual"));
+    await waitFor(() => expect(syncApi.setSelectedRelease).toHaveBeenCalledWith("org/repo", "0.2.14"));
+    expect(await screen.findByRole("button", { name: "LastBeacon 0.2.14" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
 });
 
 describe("App", () => {
