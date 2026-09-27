@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
+import {
+  confirmLogout,
+  isLoggedIn,
+  listAccountBoundProjects,
+  logout,
+  SESSION_EXPIRED_ERROR,
+} from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { bindProject, bindProjectByUrl, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
 import {
@@ -25,7 +31,6 @@ import { SyncedBuildControls } from "./components/SyncedBuildControls";
 import { SyncStatus } from "./components/SyncStatus";
 import { TabBar } from "./components/TabBar";
 import { ThemeToggle } from "./components/ThemeToggle";
-import { LogInIcon, LogOutIcon } from "./components/icons";
 import { WorkspaceSetup } from "./components/WorkspaceSetup";
 import { useLatestSync } from "./hooks/useLatestSync";
 import { useSync } from "./hooks/useSync";
@@ -213,6 +218,7 @@ function App() {
   // `undefined` until loaded, so the workspace-setup screen doesn't flash.
   const [workspaceRoot, setWorkspaceRootState] = useState<string | null | undefined>(undefined);
   const [showLogin, setShowLogin] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [boundKeys, setBoundKeys] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -316,11 +322,30 @@ function App() {
   }, []);
 
   const handleLogout = async () => {
+    setLogoutError(null);
     try {
-      await logout();
+      const toRemove = await listAccountBoundProjects();
+      if (toRemove.length > 0 && !(await confirmLogout(toRemove))) {
+        return;
+      }
+      const removed = await logout();
+      setBoundKeys((prev) => prev.filter((key) => !removed.includes(key)));
+      setActiveTab((prev) => (prev !== null && removed.includes(prev) ? null : prev));
       setLoggedIn(false);
     } catch (error) {
       console.error("failed to log out", error);
+      setLogoutError(String(error));
+      // A partial failure may still have logged out and unbound projects,
+      // so re-read the real state rather than guessing.
+      isLoggedIn()
+        .then(setLoggedIn)
+        .catch(() => setLoggedIn(false));
+      listBoundProjects()
+        .then((keys) => {
+          setBoundKeys(keys);
+          setActiveTab((prev) => (prev !== null && keys.includes(prev) ? prev : null));
+        })
+        .catch((e) => console.error("failed to reload bound projects", e));
     }
   };
 
@@ -349,20 +374,20 @@ function App() {
           />
           <ThemeToggle theme={theme} onChange={setTheme} />
           {loggedIn ? (
-            <button className="icon-button" aria-label="Log out" title="Log out" onClick={handleLogout}>
-              <LogOutIcon />
+            <button className="text-button" onClick={handleLogout}>
+              Log out
             </button>
           ) : (
-            <button
-              className="icon-button"
-              aria-label="Log in"
-              title="Log in to GitHub"
-              onClick={() => setShowLogin(true)}
-            >
-              <LogInIcon />
+            <button className="text-button" title="Log in to GitHub" onClick={() => setShowLogin(true)}>
+              Log in
             </button>
           )}
         </div>
+        {logoutError && (
+          <p className="error-text" role="alert">
+            {logoutError}
+          </p>
+        )}
         {showBindPopup && (
           <BindProjectPopup
             projects={projects.filter((p) => !boundKeys.includes(p.full_name))}

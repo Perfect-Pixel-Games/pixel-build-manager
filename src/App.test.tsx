@@ -245,20 +245,69 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
   });
 
-  it("logging out keeps the bound tabs and turns the button into Log in", async () => {
+  it("logging out removes account-bound tabs, keeps URL-bound ones, and shows Log in", async () => {
     mockAppShellBaseline();
     mockProjectDetailBaseline();
     vi.mocked(projectsApi.listProjects).mockResolvedValue([
-      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+      { full_name: "org/private-game", owner: "org", name: "private-game", favorite: false },
     ]);
-    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/repo"]);
-    vi.mocked(authApi.logout).mockResolvedValue(undefined);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/private-game", "someone/public-game"]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue(["org/private-game"]);
+    vi.mocked(authApi.confirmLogout).mockResolvedValue(true);
+    vi.mocked(authApi.logout).mockResolvedValue(["org/private-game"]);
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
 
     expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("repo");
+    expect(authApi.confirmLogout).toHaveBeenCalledWith(["org/private-game"]);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toHaveTextContent("public-game");
+  });
+
+  it("cancelling the logout confirmation keeps the user logged in", async () => {
+    mockAppShellBaseline();
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue(["org/private-game"]);
+    vi.mocked(authApi.confirmLogout).mockResolvedValue(false);
+    vi.mocked(authApi.logout).mockClear();
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    await waitFor(() => expect(authApi.confirmLogout).toHaveBeenCalled());
+    expect(authApi.logout).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  it("logs out without asking when there are no account-bound projects to remove", async () => {
+    mockAppShellBaseline();
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.confirmLogout).mockClear();
+    vi.mocked(authApi.logout).mockResolvedValue([]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(authApi.confirmLogout).not.toHaveBeenCalled();
+  });
+
+  it("shows why logging out failed", async () => {
+    mockAppShellBaseline();
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.logout).mockRejectedValue(
+      "Can't log out yet: another sync or cache operation is already in progress for org/repo",
+    );
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Can't log out yet");
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
   });
 
   it("logged out, the bind popup offers only URL binding", async () => {

@@ -273,8 +273,7 @@ fieldset {
   margin-bottom: 4px;
 }
 
-.theme-toggle button,
-.icon-button {
+.theme-toggle button {
   position: relative;
   width: 34px;
   aspect-ratio: 1 / 1;
@@ -290,12 +289,14 @@ fieldset {
   border-radius: 0;
 }
 
-.icon-button {
+/* Log in / Log out: same height and border as the theme toggle. */
+.text-button {
+  height: 34px;
+  padding: 0 12px;
   margin-bottom: 4px;
-}
-
-.icon-button:hover {
-  color: var(--color-text);
+  line-height: 1;
+  font-size: 0.9em;
+  white-space: nowrap;
 }
 
 /* Collapse shared borders between segments. */

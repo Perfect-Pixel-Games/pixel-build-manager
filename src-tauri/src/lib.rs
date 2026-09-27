@@ -99,9 +99,93 @@ async fn login_start(
     Ok(())
 }
 
+/// The bound projects that logging out would remove (see `logout`).
 #[tauri::command]
-fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.token_store.clear()
+fn list_account_bound_projects(state: tauri::State<'_, AppState>) -> Vec<String> {
+    Settings::load_from(&state.settings_path).account_bound_projects()
+}
+
+/// Logs out, and removes every project that was bound from the account's
+/// project list: its tab, its per-project settings, and everything it has
+/// on disk (cache and extracted builds). Projects bound by URL are kept.
+/// Returns the removed project keys.
+#[tauri::command]
+fn logout(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    logout_and_remove_account_projects(&state)
+}
+
+fn logout_and_remove_account_projects(state: &AppState) -> Result<Vec<String>, String> {
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    let to_remove = settings.account_bound_projects();
+
+    // Claim every project first so no sync can write into a folder we're
+    // about to delete; if one is mid-sync, refuse before changing anything.
+    let mut claimed: Vec<String> = Vec::new();
+    for key in &to_remove {
+        if let Err(e) = begin_operation(state, key) {
+            for claimed_key in &claimed {
+                end_operation(state, claimed_key);
+            }
+            return Err(format!("Can't log out yet: {e}"));
+        }
+        claimed.push(key.clone());
+    }
+
+    let result = (|| {
+        state.token_store.clear()?;
+
+        let mut disk_errors = Vec::new();
+        if let Some(workspace_root) = settings.workspace_root.clone() {
+            for key in &to_remove {
+                if let Err(e) = remove_project_from_disk(&workspace_root, key) {
+                    disk_errors.push(format!("{key}: {e}"));
+                }
+            }
+        }
+        for key in &to_remove {
+            settings.remove_project(key);
+        }
+        settings
+            .save_to(&state.settings_path)
+            .map_err(|e| e.to_string())?;
+
+        if disk_errors.is_empty() {
+            Ok(to_remove.clone())
+        } else {
+            Err(format!(
+                "Logged out, but some project files couldn't be deleted: {}",
+                disk_errors.join("; ")
+            ))
+        }
+    })();
+
+    for key in &claimed {
+        end_operation(state, key);
+    }
+    result
+}
+
+/// Deletes a project's cache and builds, then its now-empty folders.
+fn remove_project_from_disk(
+    workspace_root: &std::path::Path,
+    project_key: &str,
+) -> Result<(), String> {
+    for dir in [
+        cache_dir(workspace_root, project_key),
+        builds_root_dir(workspace_root, project_key),
+    ] {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+        }
+    }
+    // Only succeeds when empty, so anything else a user put there survives.
+    let project = sync::cache::project_dir(workspace_root, project_key);
+    let _ = std::fs::remove_dir(&project);
+    if let Some(owner) = project.parent() {
+        let _ = std::fs::remove_dir(owner);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -239,7 +323,7 @@ fn list_bound_projects(state: tauri::State<'_, AppState>) -> Result<Vec<String>,
 fn bind_project(full_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
     let mut settings = Settings::load_from(&state.settings_path);
-    settings.bind_project(&full_name);
+    settings.bind_project_via(&full_name, false);
     settings
         .save_to(&state.settings_path)
         .map_err(|e| e.to_string())
@@ -258,7 +342,7 @@ async fn bind_project_by_url(
 
     let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
     let mut settings = Settings::load_from(&state.settings_path);
-    settings.bind_project(&repo.full_name);
+    settings.bind_project_via(&repo.full_name, true);
     settings
         .save_to(&state.settings_path)
         .map_err(|e| e.to_string())?;
@@ -640,6 +724,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             login_start,
             logout,
+            list_account_bound_projects,
             is_logged_in,
             list_projects,
             list_releases_for_project,
@@ -681,9 +766,13 @@ mod tests {
     use auth::token_store::InMemoryTokenStore;
 
     fn state_with_store(store: InMemoryTokenStore) -> AppState {
+        state_with(store, PathBuf::from("unused-settings.json"))
+    }
+
+    fn state_with(store: InMemoryTokenStore, settings_path: PathBuf) -> AppState {
         AppState {
             token_store: Arc::new(store),
-            settings_path: PathBuf::from("unused-settings.json"),
+            settings_path,
             settings_lock: Mutex::new(()),
             active_operations: Mutex::new(HashSet::new()),
             token_refresh_lock: tokio::sync::Mutex::new(()),
@@ -730,5 +819,79 @@ mod tests {
         let client = github_client_or_anonymous(&state).await.unwrap();
 
         assert_eq!(client.token(), "live-token");
+    }
+
+    /// A workspace with one account-bound and one URL-bound project, each
+    /// with a cached download and an extracted build on disk.
+    fn logged_in_workspace() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let mut settings = Settings::default();
+        settings.set_workspace_root(workspace.clone());
+        settings.bind_project_via("org/private-game", false);
+        settings.set_selected_release("org/private-game", "1.0");
+        settings.bind_project_via("someone/public-game", true);
+        for key in ["org/private-game", "someone/public-game"] {
+            std::fs::create_dir_all(cache_dir(&workspace, key)).unwrap();
+            std::fs::write(cache_dir(&workspace, key).join("1-a.zip"), b"zip").unwrap();
+            std::fs::create_dir_all(builds_root_dir(&workspace, key).join("1.0")).unwrap();
+        }
+        let settings_path = dir.path().join("settings.json");
+        settings.save_to(&settings_path).unwrap();
+
+        let store = InMemoryTokenStore::new();
+        store.save("token").unwrap();
+        (dir, state_with(store, settings_path))
+    }
+
+    #[test]
+    fn logout_removes_account_bound_projects_and_their_files_but_keeps_url_bound_ones() {
+        let (dir, state) = logged_in_workspace();
+        let workspace = dir.path().join("workspace");
+
+        let removed = logout_and_remove_account_projects(&state).unwrap();
+
+        assert_eq!(removed, vec!["org/private-game"]);
+        assert_eq!(state.token_store.load().unwrap(), None);
+        let settings = Settings::load_from(&state.settings_path);
+        assert_eq!(settings.bound_projects, vec!["someone/public-game"]);
+        assert!(!settings.projects.contains_key("org/private-game"));
+        assert!(!workspace.join("org").exists());
+        assert!(cache_dir(&workspace, "someone/public-game")
+            .join("1-a.zip")
+            .exists());
+        assert!(builds_root_dir(&workspace, "someone/public-game").exists());
+    }
+
+    #[test]
+    fn logout_keeps_unrelated_files_in_a_removed_project_folder() {
+        let (dir, state) = logged_in_workspace();
+        let project = dir
+            .path()
+            .join("workspace")
+            .join("org")
+            .join("private-game");
+        std::fs::write(project.join("notes.txt"), b"mine").unwrap();
+
+        logout_and_remove_account_projects(&state).unwrap();
+
+        assert!(project.join("notes.txt").exists());
+        assert!(!project.join("cache").exists());
+        assert!(!project.join("builds").exists());
+    }
+
+    #[test]
+    fn logout_is_refused_without_changes_while_an_account_project_is_syncing() {
+        let (_dir, state) = logged_in_workspace();
+        begin_operation(&state, "org/private-game").unwrap();
+
+        let err = logout_and_remove_account_projects(&state).unwrap_err();
+
+        assert!(err.contains("Can't log out yet"), "{err}");
+        assert!(state.token_store.load().unwrap().is_some());
+        let settings = Settings::load_from(&state.settings_path);
+        assert!(settings
+            .bound_projects
+            .contains(&"org/private-game".to_string()));
     }
 }
