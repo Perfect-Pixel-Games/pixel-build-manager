@@ -175,6 +175,12 @@ pub fn latest_config_dir(
 /// directory, if any. Colocating this marker with the data it describes
 /// (rather than in `settings.json`) means it's naturally reset whenever the
 /// channel dir is cleared, with no separate bookkeeping to keep in sync.
+///
+/// A missing marker file is the expected "nothing synced yet" case and is
+/// silently mapped to `None`. Any other I/O error (permission denied, the
+/// marker being a directory, invalid UTF-8, ...) is logged rather than
+/// swallowed -- this function's `Option` contract has no way to propagate an
+/// error to its caller, but that's no reason to hide one.
 pub fn read_latest_synced_tag(
     workspace_root: &Path,
     project_key: &str,
@@ -182,7 +188,14 @@ pub fn read_latest_synced_tag(
 ) -> Option<String> {
     let marker =
         latest_channel_dir(workspace_root, project_key, channel).join(LATEST_SYNCED_TAG_FILE);
-    fs::read_to_string(marker).ok()
+    match fs::read_to_string(marker) {
+        Ok(tag) => Some(tag),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!("failed to read latest-synced-tag marker: {e}");
+            None
+        }
+    }
 }
 
 pub fn write_latest_synced_tag(
