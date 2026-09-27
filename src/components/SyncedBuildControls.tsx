@@ -1,27 +1,54 @@
 import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { getBuildDir, getBuildExecutable, launchBuild } from "../api/sync";
+import {
+  getBuildDir,
+  getBuildExecutable,
+  getLatestBuildDir,
+  getLatestBuildExecutable,
+  launchBuild,
+  launchLatestBuild,
+} from "../api/sync";
+import type { LatestChannel } from "../api/sync";
 
-type Props = {
-  projectKey: string;
-  releaseTag: string;
-  configName: string;
-  disabled: boolean;
-};
+type Props =
+  | {
+      projectKey: string;
+      releaseTag: string;
+      latestChannel?: undefined;
+      configName: string;
+      disabled: boolean;
+    }
+  | {
+      projectKey: string;
+      releaseTag?: undefined;
+      latestChannel: LatestChannel;
+      configName: string;
+      disabled: boolean;
+    };
 
-export function SyncedBuildControls({ projectKey, releaseTag, configName, disabled }: Props) {
+export function SyncedBuildControls(props: Props) {
+  const { projectKey, configName, disabled } = props;
   const [buildDir, setBuildDir] = useState<string | null>(null);
   const [executable, setExecutable] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getBuildDir(projectKey, releaseTag, configName)
-      .then(setBuildDir)
-      .catch((err) => console.error("failed to look up build dir", err));
-    getBuildExecutable(projectKey, releaseTag, configName)
-      .then(setExecutable)
-      .catch((err) => console.error("failed to look up build executable", err));
-  }, [projectKey, releaseTag, configName]);
+    if (props.latestChannel) {
+      getLatestBuildDir(projectKey, props.latestChannel, configName)
+        .then(setBuildDir)
+        .catch((err) => console.error("failed to look up build dir", err));
+      getLatestBuildExecutable(projectKey, props.latestChannel, configName)
+        .then(setExecutable)
+        .catch((err) => console.error("failed to look up build executable", err));
+    } else {
+      getBuildDir(projectKey, props.releaseTag, configName)
+        .then(setBuildDir)
+        .catch((err) => console.error("failed to look up build dir", err));
+      getBuildExecutable(projectKey, props.releaseTag, configName)
+        .then(setExecutable)
+        .catch((err) => console.error("failed to look up build executable", err));
+    }
+  }, [projectKey, props.releaseTag, props.latestChannel, configName]);
 
   const handleOpenFolder = async () => {
     setError(null);
@@ -38,7 +65,11 @@ export function SyncedBuildControls({ projectKey, releaseTag, configName, disabl
   const handleLaunch = async () => {
     setError(null);
     try {
-      await launchBuild(projectKey, releaseTag, configName);
+      if (props.latestChannel) {
+        await launchLatestBuild(projectKey, props.latestChannel, configName);
+      } else {
+        await launchBuild(projectKey, props.releaseTag, configName);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

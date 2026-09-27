@@ -197,6 +197,8 @@ fieldset {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 220px;
   padding: 8px 6px 8px 14px;
   border: 1px solid var(--color-border);
   border-bottom: none;
@@ -219,6 +221,10 @@ fieldset {
   padding: 0;
   font: inherit;
   color: inherit;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .tab button:first-child:hover {
@@ -227,6 +233,7 @@ fieldset {
 }
 
 .tab-close {
+  flex-shrink: 0;
   border: none;
   padding: 2px 6px;
   background: transparent;
@@ -242,6 +249,7 @@ fieldset {
 }
 
 .tab-bind {
+  flex-shrink: 0;
   border: 1px dashed var(--color-border);
   background: transparent;
   color: var(--color-muted);
@@ -252,6 +260,67 @@ fieldset {
 
 .tab-bind:hover {
   color: var(--color-accent);
+}
+
+.top-bar > :not(.tab-bar) {
+  flex-shrink: 0;
+}
+
+/* Theme toggle: three-way segmented control ------------------------------ */
+
+.theme-toggle {
+  display: inline-flex;
+  margin-bottom: 4px;
+}
+
+.theme-toggle button,
+.icon-button {
+  position: relative;
+  width: 34px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--color-muted);
+}
+
+.theme-toggle button {
+  border-radius: 0;
+}
+
+.icon-button {
+  margin-bottom: 4px;
+}
+
+.icon-button:hover {
+  color: var(--color-text);
+}
+
+/* Collapse shared borders between segments. */
+.theme-toggle button + button {
+  margin-left: -1px;
+}
+
+.theme-toggle button:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.theme-toggle button:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+/* Raise the hovered/active segment so its full border shows over neighbours. */
+.theme-toggle button:hover,
+.theme-toggle button[aria-pressed="true"] {
+  z-index: 1;
+}
+
+.theme-toggle button[aria-pressed="true"] {
+  background-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-surface));
+  border-color: var(--color-accent);
+  color: var(--color-text);
 }
 
 /* Build browser ---------------------------------------------------------- */
@@ -318,6 +387,14 @@ fieldset {
   color: var(--color-muted);
   font-size: 0.85em;
   white-space: nowrap;
+}
+
+.release-row--pinned {
+  font-style: italic;
+}
+
+.release-list > .release-row--pinned:nth-of-type(2) {
+  border-bottom: 2px solid var(--color-border);
 }
 
 .build-configs {

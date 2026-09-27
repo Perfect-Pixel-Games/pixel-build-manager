@@ -1,6 +1,29 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// Which of a project's two auto-tracked channels a latest-mode sync
+/// targets. Modeled as an enum (not a raw string) so an invalid value from
+/// the frontend fails Tauri's argument deserialization instead of ever
+/// reaching a directory-path computation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LatestChannel {
+    Release,
+    Prerelease,
+}
+
+impl LatestChannel {
+    fn dir_name(self) -> &'static str {
+        match self {
+            LatestChannel::Release => "release",
+            LatestChannel::Prerelease => "prerelease",
+        }
+    }
+}
+
+const LATEST_SYNCED_TAG_FILE: &str = ".synced_tag";
 
 /// Turns an "owner/repo" project key into a project directory nested as
 /// `<workspace_root>/<owner>/<repo>`. Nesting (rather than flattening the key
@@ -101,6 +124,100 @@ pub fn list_synced_configs(
 ) -> io::Result<Vec<String>> {
     let dir =
         builds_root_dir(workspace_root, project_key).join(sanitize_path_component(release_tag));
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut configs = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                configs.push(name.to_string());
+            }
+        }
+    }
+    Ok(configs)
+}
+
+/// The extraction root for one project's auto-tracked channel. Sibling to
+/// `cache/` and `builds/` -- deliberately its own top-level directory rather
+/// than living under `builds/<tag>/`, since its whole contents get wiped and
+/// replaced on every new release rather than accumulating per-tag like
+/// manual-mode builds do.
+pub fn latest_channel_dir(
+    workspace_root: &Path,
+    project_key: &str,
+    channel: LatestChannel,
+) -> PathBuf {
+    project_dir(workspace_root, project_key)
+        .join("latest")
+        .join(channel.dir_name())
+}
+
+/// The extraction directory for one ticked config within a latest channel.
+/// Keyed by the *ticked config's stable template name*, not the release
+/// asset's literal file name -- unlike manual mode's `build_config_dir`,
+/// this must stay the same path across releases even for a project whose
+/// asset names embed the version, since the whole point is one stable
+/// location that gets overwritten in place.
+pub fn latest_config_dir(
+    workspace_root: &Path,
+    project_key: &str,
+    channel: LatestChannel,
+    config_name: &str,
+) -> PathBuf {
+    latest_channel_dir(workspace_root, project_key, channel)
+        .join(sanitize_path_component(config_name))
+}
+
+/// Reads which release tag is currently extracted into `channel`'s
+/// directory, if any. Colocating this marker with the data it describes
+/// (rather than in `settings.json`) means it's naturally reset whenever the
+/// channel dir is cleared, with no separate bookkeeping to keep in sync.
+///
+/// A missing marker file is the expected "nothing synced yet" case and is
+/// silently mapped to `None`. Any other I/O error (permission denied, the
+/// marker being a directory, invalid UTF-8, ...) is logged rather than
+/// swallowed -- this function's `Option` contract has no way to propagate an
+/// error to its caller, but that's no reason to hide one.
+pub fn read_latest_synced_tag(
+    workspace_root: &Path,
+    project_key: &str,
+    channel: LatestChannel,
+) -> Option<String> {
+    let marker =
+        latest_channel_dir(workspace_root, project_key, channel).join(LATEST_SYNCED_TAG_FILE);
+    match fs::read_to_string(marker) {
+        Ok(tag) => Some(tag),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!("failed to read latest-synced-tag marker: {e}");
+            None
+        }
+    }
+}
+
+pub fn write_latest_synced_tag(
+    workspace_root: &Path,
+    project_key: &str,
+    channel: LatestChannel,
+    tag: &str,
+) -> io::Result<()> {
+    let dir = latest_channel_dir(workspace_root, project_key, channel);
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join(LATEST_SYNCED_TAG_FILE), tag)
+}
+
+/// Lists the build-config names currently extracted for `channel`, mirroring
+/// `list_synced_configs`. The marker file above is a regular file, so the
+/// existing `is_dir()` filter already excludes it with no extra logic.
+pub fn list_synced_latest_configs(
+    workspace_root: &Path,
+    project_key: &str,
+    channel: LatestChannel,
+) -> io::Result<Vec<String>> {
+    let dir = latest_channel_dir(workspace_root, project_key, channel);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -281,5 +398,104 @@ mod tests {
             configs,
             vec!["shipping.zip".to_string(), "test.zip".to_string()]
         );
+    }
+
+    #[test]
+    fn latest_channel_dir_nests_under_a_dedicated_latest_folder() {
+        let root = Path::new("D:\\Builds");
+
+        assert_eq!(
+            latest_channel_dir(root, "org/repo", LatestChannel::Release),
+            PathBuf::from("D:\\Builds\\org\\repo\\latest\\release")
+        );
+        assert_eq!(
+            latest_channel_dir(root, "org/repo", LatestChannel::Prerelease),
+            PathBuf::from("D:\\Builds\\org\\repo\\latest\\prerelease")
+        );
+    }
+
+    #[test]
+    fn latest_config_dir_sanitizes_the_config_name() {
+        let root = Path::new("D:\\Builds");
+
+        let dir = latest_config_dir(root, "org/repo", LatestChannel::Release, "..");
+
+        assert_eq!(
+            dir,
+            PathBuf::from("D:\\Builds\\org\\repo\\latest\\release\\_")
+        );
+    }
+
+    #[test]
+    fn read_latest_synced_tag_returns_none_when_nothing_has_synced_yet() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            read_latest_synced_tag(dir.path(), "org/repo", LatestChannel::Release),
+            None
+        );
+    }
+
+    #[test]
+    fn write_then_read_latest_synced_tag_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_latest_synced_tag(dir.path(), "org/repo", LatestChannel::Release, "0.2.14").unwrap();
+
+        assert_eq!(
+            read_latest_synced_tag(dir.path(), "org/repo", LatestChannel::Release),
+            Some("0.2.14".to_string())
+        );
+    }
+
+    #[test]
+    fn the_two_channels_have_independent_synced_tags() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_latest_synced_tag(dir.path(), "org/repo", LatestChannel::Release, "0.2.14").unwrap();
+        write_latest_synced_tag(
+            dir.path(),
+            "org/repo",
+            LatestChannel::Prerelease,
+            "0.3.0-rc1",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_latest_synced_tag(dir.path(), "org/repo", LatestChannel::Release),
+            Some("0.2.14".to_string())
+        );
+        assert_eq!(
+            read_latest_synced_tag(dir.path(), "org/repo", LatestChannel::Prerelease),
+            Some("0.3.0-rc1".to_string())
+        );
+    }
+
+    #[test]
+    fn list_synced_latest_configs_returns_empty_when_nothing_has_synced_yet() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let configs =
+            list_synced_latest_configs(dir.path(), "org/repo", LatestChannel::Release).unwrap();
+
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn list_synced_latest_configs_lists_extracted_configs_and_excludes_the_marker_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(latest_config_dir(
+            root,
+            "org/repo",
+            LatestChannel::Release,
+            "shipping.zip",
+        ))
+        .unwrap();
+        write_latest_synced_tag(root, "org/repo", LatestChannel::Release, "0.2.14").unwrap();
+
+        let configs = list_synced_latest_configs(root, "org/repo", LatestChannel::Release).unwrap();
+
+        assert_eq!(configs, vec!["shipping.zip".to_string()]);
     }
 }

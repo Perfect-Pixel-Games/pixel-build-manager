@@ -1,5 +1,6 @@
 mod auth;
 mod github;
+mod latest_poller;
 mod settings;
 mod sync;
 mod updater;
@@ -10,12 +11,13 @@ use auth::login::{perform_device_login, LoginStatus};
 use auth::session::ensure_valid_access_token;
 use auth::token_store::{KeyringTokenStore, TokenStore};
 use github::client::{GithubClient, ReleaseSummary};
+use latest_poller::start_background_latest_sync;
 use serde::Serialize;
-use settings::{Settings, Theme};
+use settings::{Settings, SyncMode, Theme};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use sync::cache::{build_config_dir, builds_root_dir, cache_dir};
+use sync::cache::{build_config_dir, builds_root_dir, cache_dir, LatestChannel};
 use sync::launch::{find_build_executable, launch_executable};
 use sync::orchestrator::{sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
@@ -44,7 +46,7 @@ pub struct AppState {
 /// Marks `project_key` as having an in-flight operation, failing if one is
 /// already running. Callers must pair this with `end_operation` on every
 /// exit path (success or error).
-fn begin_operation(state: &AppState, project_key: &str) -> Result<(), String> {
+pub(crate) fn begin_operation(state: &AppState, project_key: &str) -> Result<(), String> {
     let mut active = state.active_operations.lock().map_err(|e| e.to_string())?;
     if !active.insert(project_key.to_string()) {
         return Err(format!(
@@ -54,7 +56,7 @@ fn begin_operation(state: &AppState, project_key: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn end_operation(state: &AppState, project_key: &str) {
+pub(crate) fn end_operation(state: &AppState, project_key: &str) {
     if let Ok(mut active) = state.active_operations.lock() {
         active.remove(project_key);
     }
@@ -114,7 +116,7 @@ pub struct ProjectListItem {
     pub favorite: bool,
 }
 
-async fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
+pub(crate) async fn build_github_client(state: &AppState) -> Result<GithubClient, String> {
     let _guard = state.token_refresh_lock.lock().await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -299,6 +301,56 @@ fn set_ticked_configs(
 }
 
 #[tauri::command]
+fn get_sync_mode(
+    project_key: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<SyncMode, String> {
+    let settings = Settings::load_from(&state.settings_path);
+    Ok(settings
+        .projects
+        .get(&project_key)
+        .map(|p| p.sync_mode)
+        .unwrap_or_default())
+}
+
+fn spawn_latest_check(app: tauri::AppHandle, project_key: String) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = latest_poller::check_and_sync_now(&app, &project_key).await {
+            eprintln!("latest-sync check failed for {project_key}: {e}");
+        }
+    });
+}
+
+#[tauri::command]
+fn set_sync_mode(
+    app: tauri::AppHandle,
+    project_key: String,
+    mode: SyncMode,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+        let mut settings = Settings::load_from(&state.settings_path);
+        settings.set_sync_mode(&project_key, mode);
+        settings
+            .save_to(&state.settings_path)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if mode != SyncMode::Manual {
+        spawn_latest_check(app, project_key);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn check_latest_now(app: tauri::AppHandle, project_key: String) -> Result<(), String> {
+    spawn_latest_check(app, project_key);
+    Ok(())
+}
+
+#[tauri::command]
 fn list_synced_configs(
     project_key: String,
     release_tag: String,
@@ -306,6 +358,17 @@ fn list_synced_configs(
 ) -> Result<Vec<String>, String> {
     let workspace_root = workspace_root_from_settings(&state)?;
     sync::cache::list_synced_configs(&workspace_root, &project_key, &release_tag)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_synced_latest_configs(
+    project_key: String,
+    channel: LatestChannel,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    sync::cache::list_synced_latest_configs(&workspace_root, &project_key, channel)
         .map_err(|e| e.to_string())
 }
 
@@ -460,6 +523,44 @@ fn get_build_dir(
     Ok(dir.exists().then(|| dir.to_string_lossy().to_string()))
 }
 
+#[tauri::command]
+fn get_latest_build_dir(
+    project_key: String,
+    channel: LatestChannel,
+    config_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let dir = sync::cache::latest_config_dir(&workspace_root, &project_key, channel, &config_name);
+    Ok(dir.exists().then(|| dir.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn get_latest_build_executable(
+    project_key: String,
+    channel: LatestChannel,
+    config_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let dir = sync::cache::latest_config_dir(&workspace_root, &project_key, channel, &config_name);
+    Ok(find_build_executable(&dir).map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn launch_latest_build(
+    project_key: String,
+    channel: LatestChannel,
+    config_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let workspace_root = workspace_root_from_settings(&state)?;
+    let dir = sync::cache::latest_config_dir(&workspace_root, &project_key, channel, &config_name);
+    let exe = find_build_executable(&dir)
+        .ok_or_else(|| "no executable found in this build".to_string())?;
+    launch_executable(&exe).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -478,6 +579,7 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             start_background_updates(app.handle().clone());
+            start_background_latest_sync(app.handle().clone());
 
             Ok(())
         })
@@ -499,12 +601,19 @@ pub fn run() {
             set_selected_release,
             get_ticked_configs,
             set_ticked_configs,
+            get_sync_mode,
+            set_sync_mode,
+            check_latest_now,
             list_synced_configs,
+            list_synced_latest_configs,
             sync_release_asset,
             clear_project_cache,
             get_build_executable,
             launch_build,
             get_build_dir,
+            get_latest_build_dir,
+            get_latest_build_executable,
+            launch_latest_build,
             get_version_label
         ])
         .run(tauri::generate_context!())

@@ -123,4 +123,47 @@ describe("SyncedBuildControls", () => {
     expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Launch shipping.zip" })).toBeDisabled();
   });
+
+  describe("latest-channel mode", () => {
+    it("renders both buttons using the latest-channel lookups", async () => {
+      vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue("D:\\Builds\\org\\repo\\latest\\release\\shipping.zip");
+      vi.mocked(syncApi.getLatestBuildExecutable).mockResolvedValue(
+        "D:\\Builds\\org\\repo\\latest\\release\\shipping.zip\\game.exe",
+      );
+
+      render(
+        <SyncedBuildControls
+          projectKey="org/repo"
+          latestChannel="release"
+          configName="shipping.zip"
+          disabled={false}
+        />,
+      );
+
+      expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Launch shipping.zip" })).toBeInTheDocument();
+      expect(syncApi.getLatestBuildDir).toHaveBeenCalledWith("org/repo", "release", "shipping.zip");
+    });
+
+    it("launches via launchLatestBuild when latestChannel is set", async () => {
+      vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(null);
+      vi.mocked(syncApi.getLatestBuildExecutable).mockResolvedValue("D:\\Builds\\shipping.zip\\game.exe");
+      vi.mocked(syncApi.launchLatestBuild).mockResolvedValue(undefined);
+
+      render(
+        <SyncedBuildControls
+          projectKey="org/repo"
+          latestChannel="prerelease"
+          configName="shipping.zip"
+          disabled={false}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Launch shipping.zip" }));
+
+      await waitFor(() =>
+        expect(syncApi.launchLatestBuild).toHaveBeenCalledWith("org/repo", "prerelease", "shipping.zip"),
+      );
+    });
+  });
 });

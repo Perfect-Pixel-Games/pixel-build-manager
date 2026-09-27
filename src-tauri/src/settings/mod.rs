@@ -11,12 +11,23 @@ pub enum Theme {
     System,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    #[default]
+    Manual,
+    LatestRelease,
+    LatestPrerelease,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSettings {
     pub favorite: bool,
     pub selected_release_tag: Option<String>,
     #[serde(default)]
     pub ticked_configs: Vec<String>,
+    #[serde(default)]
+    pub sync_mode: SyncMode,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -87,6 +98,13 @@ impl Settings {
             .ticked_configs = configs;
     }
 
+    pub fn set_sync_mode(&mut self, project_key: &str, mode: SyncMode) {
+        self.projects
+            .entry(project_key.to_string())
+            .or_default()
+            .sync_mode = mode;
+    }
+
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
     }
@@ -123,6 +141,7 @@ mod tests {
                 favorite: true,
                 selected_release_tag: Some("0.2.14".to_string()),
                 ticked_configs: vec!["shipping.zip".to_string()],
+                sync_mode: SyncMode::LatestRelease,
             },
         );
         let settings = Settings {
@@ -222,5 +241,47 @@ mod tests {
         assert_eq!(serde_json::to_string(&Theme::Light).unwrap(), "\"light\"");
         assert_eq!(serde_json::to_string(&Theme::Dark).unwrap(), "\"dark\"");
         assert_eq!(serde_json::to_string(&Theme::System).unwrap(), "\"system\"");
+    }
+
+    #[test]
+    fn default_sync_mode_is_manual() {
+        assert_eq!(ProjectSettings::default().sync_mode, SyncMode::Manual);
+    }
+
+    #[test]
+    fn sync_mode_serializes_as_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&SyncMode::Manual).unwrap(),
+            "\"manual\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SyncMode::LatestRelease).unwrap(),
+            "\"latest_release\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SyncMode::LatestPrerelease).unwrap(),
+            "\"latest_prerelease\""
+        );
+    }
+
+    #[test]
+    fn set_sync_mode_creates_entry_if_missing() {
+        let mut settings = Settings::default();
+
+        settings.set_sync_mode("org/repo", SyncMode::LatestRelease);
+
+        assert_eq!(
+            settings.projects["org/repo"].sync_mode,
+            SyncMode::LatestRelease
+        );
+    }
+
+    #[test]
+    fn deserializing_settings_without_a_sync_mode_field_defaults_to_manual() {
+        let json = r#"{"projects":{"org/repo":{"favorite":false,"selected_release_tag":null,"ticked_configs":[]}}}"#;
+
+        let settings: Settings = serde_json::from_str(json).unwrap();
+
+        assert_eq!(settings.projects["org/repo"].sync_mode, SyncMode::Manual);
     }
 }
