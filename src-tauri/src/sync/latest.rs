@@ -26,7 +26,9 @@ fn config_template(release_tag: &str, asset_name: &str) -> String {
         previous = Some(c);
     }
 
-    collapsed.trim_matches(|c| SEPARATORS.contains(&c)).to_string()
+    collapsed
+        .trim_matches(|c| SEPARATORS.contains(&c))
+        .to_string()
 }
 
 /// Picks the most recently published release matching `channel` (release ==
@@ -34,7 +36,10 @@ fn config_template(release_tag: &str, asset_name: &str) -> String {
 /// `published_at` explicitly rather than trusting the GitHub API's response
 /// ordering. Returns `None` if no release in that channel exists yet (e.g.
 /// a project with no prerelease published so far).
-fn resolve_latest_release(releases: &[ReleaseSummary], channel: LatestChannel) -> Option<&ReleaseSummary> {
+fn resolve_latest_release(
+    releases: &[ReleaseSummary],
+    channel: LatestChannel,
+) -> Option<&ReleaseSummary> {
     let want_prerelease = matches!(channel, LatestChannel::Prerelease);
     let mut matching: Vec<&ReleaseSummary> = releases
         .iter()
@@ -84,7 +89,8 @@ mod tests {
         ];
 
         let latest_release = resolve_latest_release(&releases, LatestChannel::Release).unwrap();
-        let latest_prerelease = resolve_latest_release(&releases, LatestChannel::Prerelease).unwrap();
+        let latest_prerelease =
+            resolve_latest_release(&releases, LatestChannel::Prerelease).unwrap();
 
         assert_eq!(latest_release.tag_name, "0.2.14");
         assert_eq!(latest_prerelease.tag_name, "0.3.0-rc1");
