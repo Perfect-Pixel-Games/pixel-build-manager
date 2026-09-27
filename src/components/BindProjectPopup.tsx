@@ -1,18 +1,39 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import type { Project } from "../api/projects";
 
 type Props = {
   projects: Project[];
   onBind: (fullName: string) => void;
+  /** Binds a repo by its GitHub URL; rejects with a message to show. */
+  onBindUrl: (url: string) => Promise<void>;
   onToggleFavorite: (fullName: string, favorite: boolean) => void;
   onClose: () => void;
 };
 
-export function BindProjectPopup({ projects, onBind, onToggleFavorite, onClose }: Props) {
+export function BindProjectPopup({ projects, onBind, onBindUrl, onToggleFavorite, onClose }: Props) {
   const [search, setSearch] = useState("");
+  const [url, setUrl] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [bindingUrl, setBindingUrl] = useState(false);
   const filtered = projects.filter((project) =>
     project.name.toLowerCase().includes(search.toLowerCase()),
   );
+
+  const handleSubmitUrl = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!url.trim() || bindingUrl) {
+      return;
+    }
+    setBindingUrl(true);
+    setUrlError(null);
+    try {
+      await onBindUrl(url.trim());
+    } catch (error) {
+      setUrlError(String(error));
+    } finally {
+      setBindingUrl(false);
+    }
+  };
 
   return (
     <div className="popup-backdrop" onClick={onClose}>
@@ -50,6 +71,31 @@ export function BindProjectPopup({ projects, onBind, onToggleFavorite, onClose }
             ))
           )}
         </div>
+        <form className="popup__url" onSubmit={handleSubmitUrl}>
+          <label className="popup__url-label" htmlFor="bind-repo-url">
+            Or bind any public repo by URL
+          </label>
+          <div className="popup__url-row">
+            <input
+              id="bind-repo-url"
+              placeholder="https://github.com/owner/repo"
+              value={url}
+              onChange={(event) => {
+                setUrl(event.target.value);
+                setUrlError(null);
+              }}
+              disabled={bindingUrl}
+            />
+            <button type="submit" disabled={bindingUrl || !url.trim()}>
+              {bindingUrl ? "Checking..." : "Bind"}
+            </button>
+          </div>
+          {urlError && (
+            <p className="error-text" role="alert">
+              {urlError}
+            </p>
+          )}
+        </form>
         <button className="popup__close" onClick={onClose}>
           Close
         </button>

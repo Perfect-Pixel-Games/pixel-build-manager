@@ -11,6 +11,7 @@ use auth::login::{perform_device_login, LoginStatus};
 use auth::session::ensure_valid_access_token;
 use auth::token_store::{KeyringTokenStore, TokenStore};
 use github::client::{GithubClient, ReleaseSummary};
+use github::repo_url::resolve_bindable_repo;
 use latest_poller::start_background_latest_sync;
 use serde::Serialize;
 use settings::{Settings, SyncMode, Theme};
@@ -220,6 +221,37 @@ fn bind_project(full_name: String, state: tauri::State<'_, AppState>) -> Result<
     settings
         .save_to(&state.settings_path)
         .map_err(|e| e.to_string())
+}
+
+/// Binds any GitHub repo with releases by its URL -- including public repos
+/// the user isn't a member of, which never appear in `list_projects`.
+/// Returns the bound project so the frontend can show it without a refetch.
+#[tauri::command]
+async fn bind_project_by_url(
+    url: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ProjectListItem, String> {
+    let client = build_github_client(&state).await?;
+    let repo = resolve_bindable_repo(&client, &url).await?;
+
+    let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
+    let mut settings = Settings::load_from(&state.settings_path);
+    settings.bind_project(&repo.full_name);
+    settings
+        .save_to(&state.settings_path)
+        .map_err(|e| e.to_string())?;
+
+    let favorite = settings
+        .projects
+        .get(&repo.full_name)
+        .map(|p| p.favorite)
+        .unwrap_or(false);
+    Ok(ProjectListItem {
+        full_name: repo.full_name,
+        owner: repo.owner.login,
+        name: repo.name,
+        favorite,
+    })
 }
 
 #[tauri::command]
@@ -594,6 +626,7 @@ pub fn run() {
             set_workspace_root,
             list_bound_projects,
             bind_project,
+            bind_project_by_url,
             unbind_project,
             get_theme,
             set_theme,

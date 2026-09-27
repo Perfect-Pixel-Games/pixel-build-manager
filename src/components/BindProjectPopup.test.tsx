@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { BindProjectPopup } from "./BindProjectPopup";
 import type { Project } from "../api/projects";
 
@@ -8,10 +8,12 @@ const projects: Project[] = [
   { full_name: "org/other-game", owner: "org", name: "other-game", favorite: false },
 ];
 
+const noopBindUrl = async () => {};
+
 describe("BindProjectPopup", () => {
   it("lists every candidate project", () => {
     render(
-      <BindProjectPopup projects={projects} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
+      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByRole("button", { name: "last-beacon" })).toBeInTheDocument();
@@ -20,7 +22,7 @@ describe("BindProjectPopup", () => {
 
   it("filters the list by search text", () => {
     render(
-      <BindProjectPopup projects={projects} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
+      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
     );
 
     fireEvent.change(screen.getByLabelText("Search projects"), { target: { value: "other" } });
@@ -32,7 +34,7 @@ describe("BindProjectPopup", () => {
   it("calls onBind with the project's full name when clicked", () => {
     const onBind = vi.fn();
     render(
-      <BindProjectPopup projects={projects} onBind={onBind} onToggleFavorite={() => {}} onClose={() => {}} />,
+      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={onBind} onToggleFavorite={() => {}} onClose={() => {}} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "last-beacon" }));
@@ -45,6 +47,7 @@ describe("BindProjectPopup", () => {
     render(
       <BindProjectPopup
         projects={projects}
+        onBindUrl={noopBindUrl}
         onBind={() => {}}
         onToggleFavorite={onToggleFavorite}
         onClose={() => {}}
@@ -59,11 +62,65 @@ describe("BindProjectPopup", () => {
   it("calls onClose when Close is clicked", () => {
     const onClose = vi.fn();
     render(
-      <BindProjectPopup projects={projects} onBind={() => {}} onToggleFavorite={() => {}} onClose={onClose} />,
+      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={onClose} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("submits a pasted repo URL via onBindUrl", async () => {
+    const onBindUrl = vi.fn().mockResolvedValue(undefined);
+    render(
+      <BindProjectPopup
+        projects={projects}
+        onBind={() => {}}
+        onBindUrl={onBindUrl}
+        onToggleFavorite={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Or bind any public repo by URL"), {
+      target: { value: "  https://github.com/someone/public-game  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+
+    await waitFor(() => expect(onBindUrl).toHaveBeenCalledWith("https://github.com/someone/public-game"));
+  });
+
+  it("disables the URL Bind button until something is entered", () => {
+    render(
+      <BindProjectPopup
+        projects={projects}
+        onBind={() => {}}
+        onBindUrl={noopBindUrl}
+        onToggleFavorite={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Bind" })).toBeDisabled();
+  });
+
+  it("shows the error when binding by URL fails", async () => {
+    const onBindUrl = vi.fn().mockRejectedValue("Repository someone/nothing was not found.");
+    render(
+      <BindProjectPopup
+        projects={projects}
+        onBind={() => {}}
+        onBindUrl={onBindUrl}
+        onToggleFavorite={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Or bind any public repo by URL"), {
+      target: { value: "https://github.com/someone/nothing" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Repository someone/nothing was not found.");
   });
 });

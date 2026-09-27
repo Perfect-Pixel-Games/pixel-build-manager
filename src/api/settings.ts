@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { Project } from "./projects";
 
 export type Theme = "light" | "dark" | "system";
 
@@ -29,6 +30,13 @@ export function listBoundProjects(): Promise<string[]> {
 
 export function bindProject(fullName: string): Promise<void> {
   return invoke("bind_project", { fullName });
+}
+
+/** Binds any GitHub repo with releases by URL, including public repos the
+ * user isn't a member of. Rejects with a user-facing message if the URL is
+ * invalid, the repo can't be found, or it has no releases. */
+export function bindProjectByUrl(url: string): Promise<Project> {
+  return invoke("bind_project_by_url", { url });
 }
 
 export function unbindProject(fullName: string): Promise<void> {

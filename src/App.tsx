@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
-import { bindProject, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
+import { bindProject, bindProjectByUrl, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
 import {
   checkLatestNow,
   getSelectedRelease,
@@ -260,12 +260,23 @@ function App() {
   const handleBind = async (fullName: string) => {
     try {
       await bindProject(fullName);
-      setBoundKeys((prev) => [...prev, fullName]);
+      setBoundKeys((prev) => (prev.includes(fullName) ? prev : [...prev, fullName]));
       setActiveTab(fullName);
       setShowBindPopup(false);
     } catch (error) {
       console.error("failed to bind project", error);
     }
+  };
+
+  // Errors propagate so the popup can show why the URL couldn't be bound.
+  const handleBindUrl = async (url: string) => {
+    const project = await bindProjectByUrl(url);
+    setProjects((prev) =>
+      prev.some((p) => p.full_name === project.full_name) ? prev : [...prev, project],
+    );
+    setBoundKeys((prev) => (prev.includes(project.full_name) ? prev : [...prev, project.full_name]));
+    setActiveTab(project.full_name);
+    setShowBindPopup(false);
   };
 
   const handleUnbind = async (fullName: string) => {
@@ -321,6 +332,7 @@ function App() {
           <BindProjectPopup
             projects={projects.filter((p) => !boundKeys.includes(p.full_name))}
             onBind={handleBind}
+            onBindUrl={handleBindUrl}
             onToggleFavorite={handleToggleFavorite}
             onClose={() => setShowBindPopup(false)}
           />
