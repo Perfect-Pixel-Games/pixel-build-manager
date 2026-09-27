@@ -36,6 +36,14 @@ function mockProjectDetailBaseline() {
   vi.mocked(syncApi.listSyncedConfigs).mockResolvedValue([]);
   vi.mocked(syncApi.onSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
   vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
+  vi.mocked(syncApi.getSyncMode).mockResolvedValue("manual");
+  vi.mocked(syncApi.setSyncMode).mockResolvedValue(undefined);
+  vi.mocked(syncApi.checkLatestNow).mockResolvedValue(undefined);
+  vi.mocked(syncApi.listSyncedLatestConfigs).mockResolvedValue([]);
+  vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(null);
+  vi.mocked(syncApi.getLatestBuildExecutable).mockResolvedValue(null);
+  vi.mocked(syncApi.onLatestSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
+  vi.mocked(syncApi.onLatestSyncFinished).mockImplementation(() => Promise.resolve(() => {}));
 }
 
 function mockAppShellBaseline() {
@@ -95,6 +103,33 @@ describe("ProjectDetail", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
 
     expect(await screen.findByRole("status")).toBeInTheDocument();
+  });
+
+  it("selecting Latest release switches sync mode, persists it, and shows latest configs' controls", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.listSyncedLatestConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(
+      "D:\\Builds\\org\\repo\\latest\\release\\shipping.zip",
+    );
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Latest release" }));
+
+    await waitFor(() => expect(syncApi.setSyncMode).toHaveBeenCalledWith("org/repo", "latest_release"));
+    expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeInTheDocument();
+  });
+
+  it("clicking Sync while in a latest mode calls checkLatestNow instead of syncing a concrete release", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSyncMode).mockResolvedValue("latest_release");
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+
+    await waitFor(() => expect(syncApi.checkLatestNow).toHaveBeenCalledWith("org/repo"));
+    expect(syncApi.syncReleaseAsset).not.toHaveBeenCalled();
   });
 });
 

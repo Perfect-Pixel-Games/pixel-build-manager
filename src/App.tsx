@@ -3,11 +3,17 @@ import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { bindProject, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
 import {
+  checkLatestNow,
   getSelectedRelease,
+  getSyncMode,
   getTickedConfigs,
   listSyncedConfigs,
+  listSyncedLatestConfigs,
   setSelectedRelease,
+  setSyncMode,
   setTickedConfigs,
+  type LatestChannel,
+  type SyncMode,
 } from "./api/sync";
 import { getVersionLabel } from "./api/version";
 import { BindProjectPopup } from "./components/BindProjectPopup";
@@ -20,6 +26,7 @@ import { SyncStatus } from "./components/SyncStatus";
 import { TabBar } from "./components/TabBar";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WorkspaceSetup } from "./components/WorkspaceSetup";
+import { useLatestSync } from "./hooks/useLatestSync";
 import { useSync } from "./hooks/useSync";
 import { useTheme } from "./hooks/useTheme";
 import "./App.css";
@@ -29,7 +36,9 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
   const [selectedReleaseTag, setSelectedReleaseTagState] = useState<string | null>(null);
   const [tickedConfigs, setTickedConfigsState] = useState<string[]>([]);
   const [syncedConfigs, setSyncedConfigs] = useState<string[]>([]);
+  const [syncMode, setSyncModeState] = useState<SyncMode>("manual");
   const { state, syncConfigs } = useSync(projectKey);
+  const { state: latestState } = useLatestSync(projectKey);
 
   useEffect(() => {
     listReleasesForProject(projectKey)
@@ -41,25 +50,44 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
     getTickedConfigs(projectKey)
       .then(setTickedConfigsState)
       .catch((error) => console.error("failed to load ticked configs", error));
+    getSyncMode(projectKey)
+      .then(setSyncModeState)
+      .catch((error) => console.error("failed to load sync mode", error));
   }, [projectKey]);
 
   useEffect(() => {
-    if (!selectedReleaseTag) {
-      setSyncedConfigs([]);
+    if (syncMode === "manual") {
+      if (!selectedReleaseTag) {
+        setSyncedConfigs([]);
+        return;
+      }
+      listSyncedConfigs(projectKey, selectedReleaseTag)
+        .then(setSyncedConfigs)
+        .catch((error) => console.error("failed to list synced configs", error));
       return;
     }
-    listSyncedConfigs(projectKey, selectedReleaseTag)
+    const channel: LatestChannel = syncMode === "latest_prerelease" ? "prerelease" : "release";
+    listSyncedLatestConfigs(projectKey, channel)
       .then(setSyncedConfigs)
-      .catch((error) => console.error("failed to list synced configs", error));
-  }, [projectKey, selectedReleaseTag]);
+      .catch((error) => console.error("failed to list synced latest configs", error));
+  }, [projectKey, syncMode, selectedReleaseTag, latestState.phase]);
 
-  const isBusy = state.phase === "syncing";
+  const isManualSyncing = state.phase === "syncing";
+  const isLatestSyncing = latestState.phase === "syncing";
+  const isBusy = isManualSyncing || isLatestSyncing;
 
   const handleSelectRelease = (tag: string) => {
+    setSyncModeState("manual");
     setSelectedReleaseTagState(tag);
+    setSyncMode(projectKey, "manual").catch((error) => console.error("failed to persist sync mode", error));
     setSelectedRelease(projectKey, tag).catch((error) =>
       console.error("failed to persist selected release", error),
     );
+  };
+
+  const handleSelectLatest = (mode: "latest_release" | "latest_prerelease") => {
+    setSyncModeState(mode);
+    setSyncMode(projectKey, mode).catch((error) => console.error("failed to persist sync mode", error));
   };
 
   const handleToggleConfig = (configName: string, ticked: boolean) => {
@@ -89,38 +117,58 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
     }
   };
 
-  const busyLabel =
-    state.phase === "syncing"
-      ? state.downloaded >= state.total
-        ? `Finishing up ${state.configName}...`
-        : `Downloading ${state.configName}: ${Math.round((state.downloaded / state.total) * 100)}%`
+  const handleSyncLatest = () => {
+    checkLatestNow(projectKey).catch((error) => console.error("failed to trigger latest sync", error));
+  };
+
+  const busyLabel = isManualSyncing
+    ? state.downloaded >= state.total
+      ? `Finishing up ${state.configName}...`
+      : `Downloading ${state.configName}: ${Math.round((state.downloaded / state.total) * 100)}%`
+    : isLatestSyncing
+      ? `Syncing latest ${latestState.channel}: ${Math.round((latestState.downloaded / latestState.total) * 100)}%`
       : undefined;
+
+  const showSyncedBuilds = (syncMode !== "manual" || selectedReleaseTag !== null) && syncedConfigs.length > 0;
 
   return (
     <div className="project-detail">
       <BusyOverlay active={isBusy} label={busyLabel}>
         <BuildBrowser
           releases={releases}
+          syncMode={syncMode}
           selectedReleaseTag={selectedReleaseTag}
           onSelectRelease={handleSelectRelease}
+          onSelectLatest={handleSelectLatest}
           tickedConfigs={tickedConfigs}
           onToggleConfig={handleToggleConfig}
           syncedConfigs={syncedConfigs}
           onSync={handleSync}
+          onSyncLatest={handleSyncLatest}
           disabled={isBusy}
         />
         <SyncStatus state={state} />
-        {selectedReleaseTag && syncedConfigs.length > 0 && (
+        {showSyncedBuilds && (
           <div className="synced-builds">
-            {syncedConfigs.map((config) => (
-              <SyncedBuildControls
-                key={config}
-                projectKey={projectKey}
-                releaseTag={selectedReleaseTag}
-                configName={config}
-                disabled={isBusy}
-              />
-            ))}
+            {syncedConfigs.map((config) =>
+              syncMode === "manual" ? (
+                <SyncedBuildControls
+                  key={config}
+                  projectKey={projectKey}
+                  releaseTag={selectedReleaseTag as string}
+                  configName={config}
+                  disabled={isBusy}
+                />
+              ) : (
+                <SyncedBuildControls
+                  key={config}
+                  projectKey={projectKey}
+                  latestChannel={syncMode === "latest_prerelease" ? "prerelease" : "release"}
+                  configName={config}
+                  disabled={isBusy}
+                />
+              ),
+            )}
           </div>
         )}
       </BusyOverlay>
