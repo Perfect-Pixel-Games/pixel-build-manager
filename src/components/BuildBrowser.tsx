@@ -107,15 +107,29 @@ export function BuildBrowser({
     : [];
   const missingAssets = availableTickedAssets.filter((asset) => !syncedConfigs.includes(asset.name));
 
+  // Scoped the same way availableTickedAssets scopes manual mode: a ticked
+  // config that only exists in the *other* channel (e.g. "ps4.zip" ticked
+  // while in latest_release mode, but it only ever ships as a prerelease
+  // asset) can never appear in syncedConfigs, since the backend has nothing
+  // to sync it against. Without this scoping, "fully synced" would get stuck
+  // forever waiting on a config the effective release can't ever provide.
+  const availableTickedConfigNames = effectiveRelease
+    ? tickedConfigs.filter((config) =>
+        effectiveRelease.assets.some((asset) => configTemplate(effectiveRelease, asset.name) === config),
+      )
+    : [];
+
   const fullySynced = isLatestMode
-    ? tickedConfigs.length > 0 && tickedConfigs.every((config) => syncedConfigs.includes(config))
+    ? availableTickedConfigNames.length > 0 &&
+      availableTickedConfigNames.every((config) => syncedConfigs.includes(config))
     : availableTickedAssets.length > 0 && missingAssets.length === 0;
 
-  const syncDisabled = disabled || (isLatestMode ? tickedConfigs.length === 0 : availableTickedAssets.length === 0);
+  const syncDisabled =
+    disabled || (isLatestMode ? availableTickedConfigNames.length === 0 : availableTickedAssets.length === 0);
 
   const handleSyncClick = () => {
     if (isLatestMode) {
-      if (tickedConfigs.length === 0) {
+      if (availableTickedConfigNames.length === 0) {
         return;
       }
       onSyncLatest();

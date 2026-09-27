@@ -3,7 +3,21 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { BuildBrowser } from "./BuildBrowser";
 import type { Release } from "../api/projects";
 
+// NOTE: 0.2.13 is deliberately listed BEFORE 0.2.14 here even though 0.2.14
+// was published more recently. This ordering is load-bearing: it's what
+// makes "resolves available configs against the most recently published
+// matching release" (below) actually exercise resolveLatest()'s sort rather
+// than passing vacuously because array order already happened to match
+// recency order.
 const releases: Release[] = [
+  {
+    id: 2,
+    tag_name: "0.2.13",
+    name: "LastBeacon 0.2.13",
+    prerelease: false,
+    published_at: "2026-08-01T00:00:00Z",
+    assets: [{ id: 8, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/c" }],
+  },
   {
     id: 1,
     tag_name: "0.2.14",
@@ -14,14 +28,6 @@ const releases: Release[] = [
       { id: 10, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/a" },
       { id: 11, name: "test.zip", size: 100, browser_download_url: "https://example.com/b" },
     ],
-  },
-  {
-    id: 2,
-    tag_name: "0.2.13",
-    name: "LastBeacon 0.2.13",
-    prerelease: false,
-    published_at: "2026-08-01T00:00:00Z",
-    assets: [{ id: 8, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/c" }],
   },
   {
     id: 3,
@@ -143,7 +149,7 @@ describe("BuildBrowser", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sync" }));
 
-    expect(onSync).toHaveBeenCalledWith(releases[0], [releases[0].assets[0]]);
+    expect(onSync).toHaveBeenCalledWith(releases[1], [releases[1].assets[0]]);
   });
 
   it("shows a checkmark and re-verifies every ticked asset once fully synced", () => {
@@ -157,7 +163,7 @@ describe("BuildBrowser", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "✓ Synced" }));
 
-    expect(onSync).toHaveBeenCalledWith(releases[0], [releases[0].assets[0]]);
+    expect(onSync).toHaveBeenCalledWith(releases[1], [releases[1].assets[0]]);
   });
 
   it("disables the search box, release rows, checkboxes, and sync button when disabled", () => {
@@ -221,6 +227,20 @@ describe("BuildBrowser", () => {
 
     it("shows the checkmark in latest mode once every ticked config is synced", () => {
       renderBrowser({ syncMode: "latest_release", tickedConfigs: ["shipping.zip"], syncedConfigs: ["shipping.zip"] });
+
+      expect(screen.getByRole("button", { name: "✓ Synced" })).toBeInTheDocument();
+    });
+
+    it("only requires ticked configs available in the effective release to show as fully synced", () => {
+      // "ps4.zip" only ships on the prerelease release, so while in
+      // latest_release mode it can never appear in syncedConfigs -- it must
+      // not block "shipping.zip" (which IS available and already synced)
+      // from showing as fully synced.
+      renderBrowser({
+        syncMode: "latest_release",
+        tickedConfigs: ["shipping.zip", "ps4.zip"],
+        syncedConfigs: ["shipping.zip"],
+      });
 
       expect(screen.getByRole("button", { name: "✓ Synced" })).toBeInTheDocument();
     });
