@@ -1,0 +1,420 @@
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import App, { ProjectDetail } from "./App";
+import * as projectsApi from "./api/projects";
+import * as syncApi from "./api/sync";
+import * as authApi from "./api/auth";
+import { SESSION_EXPIRED_ERROR } from "./api/auth";
+import * as versionApi from "./api/version";
+import * as settingsApi from "./api/settings";
+import type { Release } from "./api/projects";
+
+vi.mock("./api/projects");
+vi.mock("./api/sync");
+vi.mock("./api/auth");
+vi.mock("./api/version");
+vi.mock("./api/settings");
+
+const release: Release = {
+  id: 1,
+  tag_name: "0.2.14",
+  name: "LastBeacon 0.2.14",
+  prerelease: false,
+  published_at: null,
+  assets: [
+    { id: 10, name: "shipping.zip", size: 100, browser_download_url: "https://example.com/a" },
+    { id: 11, name: "test.zip", size: 100, browser_download_url: "https://example.com/b" },
+  ],
+};
+
+function mockProjectDetailBaseline() {
+  vi.mocked(projectsApi.listReleasesForProject).mockResolvedValue([release]);
+  vi.mocked(syncApi.getSelectedRelease).mockResolvedValue(null);
+  vi.mocked(syncApi.setSelectedRelease).mockResolvedValue(undefined);
+  vi.mocked(syncApi.getTickedConfigs).mockResolvedValue([]);
+  vi.mocked(syncApi.setTickedConfigs).mockResolvedValue(undefined);
+  vi.mocked(syncApi.listSyncedConfigs).mockResolvedValue([]);
+  vi.mocked(syncApi.onSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
+  vi.mocked(syncApi.syncReleaseAsset).mockResolvedValue(undefined);
+  vi.mocked(syncApi.getSyncMode).mockResolvedValue("manual");
+  vi.mocked(syncApi.setSyncMode).mockResolvedValue(undefined);
+  vi.mocked(syncApi.checkLatestNow).mockResolvedValue(undefined);
+  vi.mocked(syncApi.listSyncedLatestConfigs).mockResolvedValue([]);
+  vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(null);
+  vi.mocked(syncApi.getLatestBuildExecutable).mockResolvedValue(null);
+  vi.mocked(syncApi.onLatestSyncProgress).mockImplementation(() => Promise.resolve(() => {}));
+  vi.mocked(syncApi.onLatestSyncFinished).mockImplementation(() => Promise.resolve(() => {}));
+}
+
+function mockAppShellBaseline() {
+  vi.mocked(authApi.isLoggedIn).mockResolvedValue(true);
+  vi.mocked(authApi.onLoginStatus).mockResolvedValue(() => {});
+  vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
+  vi.mocked(settingsApi.getWorkspaceRoot).mockResolvedValue("D:\\Builds");
+  vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+  vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+}
+
+describe("ProjectDetail", () => {
+  it("loads the persisted selected release and ticked configs, then renders them", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSelectedRelease).mockResolvedValue("0.2.14");
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+
+    render(<ProjectDetail projectKey="org/repo" />);
+
+    expect(await screen.findByRole("button", { name: "LastBeacon 0.2.14" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(await screen.findByLabelText("shipping.zip")).toBeChecked();
+  });
+
+  it("persists the selected release when a release row is clicked", async () => {
+    mockProjectDetailBaseline();
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "LastBeacon 0.2.14" }));
+
+    await waitFor(() => expect(syncApi.setSelectedRelease).toHaveBeenCalledWith("org/repo", "0.2.14"));
+  });
+
+  it("persists ticked configs and syncs only the missing ticked assets when Sync is clicked", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSelectedRelease).mockResolvedValue("0.2.14");
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByLabelText("shipping.zip"));
+
+    await waitFor(() => expect(syncApi.setTickedConfigs).toHaveBeenCalledWith("org/repo", ["shipping.zip"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+
+    await waitFor(() => expect(syncApi.syncReleaseAsset).toHaveBeenCalledTimes(1));
+    expect(syncApi.syncReleaseAsset).toHaveBeenCalledWith("org/repo", release, release.assets[0]);
+  });
+
+  it("shows the busy overlay while a sync is in flight", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSelectedRelease).mockResolvedValue("0.2.14");
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.syncReleaseAsset).mockImplementation(() => new Promise(() => {}));
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+  });
+
+  it("selecting Latest release switches sync mode, persists it, and shows latest configs' controls", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.listSyncedLatestConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(
+      "D:\\Builds\\org\\repo\\latest\\release\\shipping.zip",
+    );
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Latest release" }));
+
+    await waitFor(() => expect(syncApi.setSyncMode).toHaveBeenCalledWith("org/repo", "latest_release"));
+    expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeInTheDocument();
+  });
+
+  it("clicking Sync while in a latest mode calls checkLatestNow instead of syncing a concrete release", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSyncMode).mockResolvedValue("latest_release");
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+
+    await waitFor(() => expect(syncApi.checkLatestNow).toHaveBeenCalledWith("org/repo"));
+    expect(syncApi.syncReleaseAsset).not.toHaveBeenCalled();
+  });
+
+  it("selecting Latest prerelease routes through the prerelease channel end to end", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getTickedConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.listSyncedLatestConfigs).mockResolvedValue(["shipping.zip"]);
+    vi.mocked(syncApi.getLatestBuildDir).mockResolvedValue(
+      "D:\\Builds\\org\\repo\\latest\\prerelease\\shipping.zip",
+    );
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Latest prerelease" }));
+
+    await waitFor(() => expect(syncApi.setSyncMode).toHaveBeenCalledWith("org/repo", "latest_prerelease"));
+    await waitFor(() => expect(syncApi.listSyncedLatestConfigs).toHaveBeenCalledWith("org/repo", "prerelease"));
+    expect(await screen.findByRole("button", { name: "Open folder for shipping.zip" })).toBeInTheDocument();
+    expect(syncApi.getLatestBuildDir).toHaveBeenCalledWith("org/repo", "prerelease", "shipping.zip");
+  });
+
+  it("clicking a concrete release while in a latest mode resets sync mode back to manual", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(syncApi.getSyncMode).mockResolvedValue("latest_release");
+
+    render(<ProjectDetail projectKey="org/repo" />);
+    fireEvent.click(await screen.findByRole("button", { name: "LastBeacon 0.2.14" }));
+
+    await waitFor(() => expect(syncApi.setSyncMode).toHaveBeenCalledWith("org/repo", "manual"));
+    await waitFor(() => expect(syncApi.setSelectedRelease).toHaveBeenCalledWith("org/repo", "0.2.14"));
+    expect(await screen.findByRole("button", { name: "LastBeacon 0.2.14" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+});
+
+describe("ProjectDetail release loading failures", () => {
+  it("logged out, suggests logging in when a repo's releases can't be loaded", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listReleasesForProject).mockRejectedValue("github api error (404): Not Found");
+
+    render(<ProjectDetail projectKey="org/private-repo" loggedIn={false} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't load releases for org/private-repo.");
+    expect(alert).toHaveTextContent("log in to GitHub");
+  });
+
+  it("logged in, reports the failure without the login hint", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listReleasesForProject).mockRejectedValue("network error");
+
+    render(<ProjectDetail projectKey="org/repo" />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't load releases for org/repo.");
+    expect(alert).not.toHaveTextContent("log in");
+  });
+});
+
+describe("App", () => {
+  it("shows the version label in the footer even before logging in", async () => {
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+    vi.mocked(authApi.onLoginStatus).mockResolvedValue(() => {});
+    vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
+    // useTheme() runs unconditionally (even pre-login, so the login screen
+    // itself reflects the saved theme), so it must be mocked here too.
+    vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+    vi.mocked(settingsApi.getWorkspaceRoot).mockResolvedValue(null);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+
+    render(<App />);
+
+    const versionLabel = await screen.findByText("Release 0.4.0");
+    expect(versionLabel).toBeInTheDocument();
+    expect(versionLabel.closest(".app-footer")).not.toBeNull();
+  });
+
+  it("drops to logged-out mode when loading projects reports the session has expired", async () => {
+    mockAppShellBaseline();
+    vi.mocked(projectsApi.listProjects).mockRejectedValue(SESSION_EXPIRED_ERROR);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+  });
+
+  it("opens on the project binding page when logged out, not the login screen", async () => {
+    mockAppShellBaseline();
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /log in with github/i })).not.toBeInTheDocument();
+    expect(projectsApi.listProjects).not.toHaveBeenCalled();
+  });
+
+  it("the Log in button opens the login screen, which can be left without logging in", async () => {
+    mockAppShellBaseline();
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log in" }));
+
+    expect(await screen.findByRole("button", { name: /log in with github/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without logging in" }));
+
+    expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+  });
+
+  it("logging out removes account-bound tabs, keeps URL-bound ones, and shows Log in", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/private-game", owner: "org", name: "private-game", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/private-game", "someone/public-game"]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue(["org/private-game"]);
+    vi.mocked(authApi.confirmLogout).mockResolvedValue(true);
+    vi.mocked(authApi.logout).mockResolvedValue(["org/private-game"]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(authApi.confirmLogout).toHaveBeenCalledWith(["org/private-game"]);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toHaveTextContent("public-game");
+  });
+
+  it("cancelling the logout confirmation keeps the user logged in", async () => {
+    mockAppShellBaseline();
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue(["org/private-game"]);
+    vi.mocked(authApi.confirmLogout).mockResolvedValue(false);
+    vi.mocked(authApi.logout).mockClear();
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    await waitFor(() => expect(authApi.confirmLogout).toHaveBeenCalled());
+    expect(authApi.logout).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  it("logs out without asking when there are no account-bound projects to remove", async () => {
+    mockAppShellBaseline();
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.confirmLogout).mockClear();
+    vi.mocked(authApi.logout).mockResolvedValue([]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(authApi.confirmLogout).not.toHaveBeenCalled();
+  });
+
+  it("shows why logging out failed", async () => {
+    mockAppShellBaseline();
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.listAccountBoundProjects).mockResolvedValue([]);
+    vi.mocked(authApi.logout).mockRejectedValue(
+      "Can't log out yet: another sync or cache operation is already in progress for org/repo",
+    );
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Can't log out yet");
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  it("logged out, the bind popup offers only URL binding", async () => {
+    mockAppShellBaseline();
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind a project" }));
+
+    expect(await screen.findByLabelText("Bind a public repo by URL")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search projects")).not.toBeInTheDocument();
+  });
+
+  it("shows only a + button when no projects are bound", async () => {
+    mockAppShellBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("automatically selects the first bound tab on load", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo-a", owner: "org", name: "repo-a", favorite: false },
+      { full_name: "org/repo-b", owner: "org", name: "repo-b", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/repo-a", "org/repo-b"]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("repo-a");
+  });
+
+  it("binding a project via the popup opens its tab", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.bindProject).mockResolvedValue(undefined);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind a project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "repo" }));
+
+    await waitFor(() => expect(settingsApi.bindProject).toHaveBeenCalledWith("org/repo"));
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("repo");
+  });
+
+  it("closing a tab's x unbinds the project", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/repo"]);
+    vi.mocked(settingsApi.unbindProject).mockResolvedValue(undefined);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Close repo" }));
+
+    await waitFor(() => expect(settingsApi.unbindProject).toHaveBeenCalledWith("org/repo"));
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("binding a repo by URL opens a tab named after the repo", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.bindProjectByUrl).mockResolvedValue({
+      full_name: "someone/public-game",
+      owner: "someone",
+      name: "public-game",
+      favorite: false,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind a project" }));
+    fireEvent.change(await screen.findByLabelText("Or bind any public repo by URL"), {
+      target: { value: "https://github.com/someone/public-game" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+
+    await waitFor(() =>
+      expect(settingsApi.bindProjectByUrl).toHaveBeenCalledWith("https://github.com/someone/public-game"),
+    );
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("public-game");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("names a URL-bound tab after its repo even when it isn't in the project list", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["someone/public-game"]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("public-game");
+  });
+});
