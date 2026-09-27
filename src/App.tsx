@@ -25,6 +25,7 @@ import { SyncedBuildControls } from "./components/SyncedBuildControls";
 import { SyncStatus } from "./components/SyncStatus";
 import { TabBar } from "./components/TabBar";
 import { ThemeToggle } from "./components/ThemeToggle";
+import { LogOutIcon } from "./components/icons";
 import { WorkspaceSetup } from "./components/WorkspaceSetup";
 import { useLatestSync } from "./hooks/useLatestSync";
 import { useSync } from "./hooks/useSync";
@@ -312,7 +313,9 @@ function App() {
             onRequestBind={() => setShowBindPopup(true)}
           />
           <ThemeToggle theme={theme} onChange={setTheme} />
-          <button onClick={handleLogout}>Log out</button>
+          <button className="icon-button" aria-label="Log out" title="Log out" onClick={handleLogout}>
+            <LogOutIcon />
+          </button>
         </div>
         {showBindPopup && (
           <BindProjectPopup

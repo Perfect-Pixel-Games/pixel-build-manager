@@ -18,7 +18,9 @@ export function TabBar({ projects, boundKeys, activeKey, onSelect, onUnbind, onR
         const name = byKey.get(key)?.name ?? key;
         return (
           <span key={key} className="tab" role="tab" aria-selected={key === activeKey}>
-            <button onClick={() => onSelect(key)}>{name}</button>
+            <button onClick={() => onSelect(key)} title={name}>
+              {name}
+            </button>
             <button className="tab-close" aria-label={`Close ${name}`} onClick={() => onUnbind(key)}>
               ×
             </button>
