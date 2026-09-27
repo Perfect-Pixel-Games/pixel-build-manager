@@ -515,4 +515,63 @@ mod tests {
 
         assert_eq!(outcome, LatestSyncOutcome::NoMatchingRelease);
     }
+
+    #[tokio::test]
+    async fn a_failed_download_for_one_config_leaves_the_marker_unwritten_so_the_next_check_retries_everything(
+    ) {
+        let server = MockServer::start().await;
+        let workspace = tempfile::tempdir().unwrap();
+        let client = GithubClient::with_base_url("test-token".to_string(), server.uri());
+        let http = reqwest::Client::new();
+        let zip_bytes = build_test_zip_bytes();
+
+        mount_releases(
+            &server,
+            serde_json::json!([
+                { "id": 1, "tag_name": "0.2.14", "name": null, "prerelease": false, "published_at": "2026-09-01T00:00:00Z",
+                  "assets": [
+                      { "id": 10, "name": "shipping.zip", "size": zip_bytes.len(), "browser_download_url": "https://example.com/a" },
+                      { "id": 11, "name": "test.zip", "size": zip_bytes.len(), "browser_download_url": "https://example.com/b" }
+                  ] }
+            ]),
+        )
+        .await;
+        // First ticked config's asset downloads fine...
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/releases/assets/10"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(zip_bytes.clone()))
+            .mount(&server)
+            .await;
+        // ...but the second one fails with a server error.
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/releases/assets/11"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let ticked = vec!["shipping.zip".to_string(), "test.zip".to_string()];
+
+        let result = check_and_sync_latest(
+            &http,
+            &client,
+            "org",
+            "repo",
+            workspace.path(),
+            "org/repo",
+            LatestChannel::Release,
+            &ticked,
+            |_, _| {},
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "a failed asset download must surface as an error, not a partial success"
+        );
+        assert_eq!(
+            cache::read_latest_synced_tag(workspace.path(), "org/repo", LatestChannel::Release),
+            None,
+            "the marker must not be written when the sync didn't fully complete, so the next check retries from scratch"
+        );
+    }
 }
