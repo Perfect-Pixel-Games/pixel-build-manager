@@ -18,7 +18,7 @@ use settings::{Settings, SyncMode, Theme};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use sync::cache::{build_config_dir, builds_root_dir, cache_dir, LatestChannel};
+use sync::cache::{build_config_dir, LatestChannel};
 use sync::launch::{find_build_executable, launch_executable};
 use sync::orchestrator::{sync_asset, SyncRequest};
 use tauri::{Emitter, Manager};
@@ -166,19 +166,23 @@ fn logout_and_remove_account_projects(state: &AppState) -> Result<Vec<String>, S
     result
 }
 
-/// Deletes a project's cache and builds, then its now-empty folders.
-fn remove_project_from_disk(
-    workspace_root: &std::path::Path,
-    project_key: &str,
-) -> Result<(), String> {
-    for dir in [
-        cache_dir(workspace_root, project_key),
-        builds_root_dir(workspace_root, project_key),
-    ] {
+/// Deletes all of a project's data on disk: downloaded cache, manual-mode
+/// builds and latest-mode builds.
+fn delete_project_data(workspace_root: &std::path::Path, project_key: &str) -> Result<(), String> {
+    for dir in sync::cache::project_data_dirs(workspace_root, project_key) {
         if dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
         }
     }
+    Ok(())
+}
+
+/// Deletes all of a project's data, then its now-empty folders.
+fn remove_project_from_disk(
+    workspace_root: &std::path::Path,
+    project_key: &str,
+) -> Result<(), String> {
+    delete_project_data(workspace_root, project_key)?;
     // Only succeeds when empty, so anything else a user put there survives.
     let project = sync::cache::project_dir(workspace_root, project_key);
     let _ = std::fs::remove_dir(&project);
@@ -604,23 +608,15 @@ fn clear_project_cache(
     result
 }
 
-// Clears everything this project has on disk: the raw downloaded cache
-// *and* every extracted release/config build under `builds/`. There's no
+// Clears everything this project has on disk: the raw downloaded cache,
+// every extracted release/config build under `builds/`, and the latest-mode
+// builds under `latest/`. There's no
 // separate "clear builds" affordance, since leaving extracted builds behind
 // after a cache clear would contradict "manually cleared" -- the one button
 // is the manual-clear mechanism for the whole project's disk footprint.
 fn clear_project_cache_inner(project_key: &str, state: &AppState) -> Result<(), String> {
     let workspace_root = workspace_root_from_settings(state)?;
-
-    let cache = cache_dir(&workspace_root, project_key);
-    if cache.exists() {
-        std::fs::remove_dir_all(&cache).map_err(|e| e.to_string())?;
-    }
-    let builds = builds_root_dir(&workspace_root, project_key);
-    if builds.exists() {
-        std::fs::remove_dir_all(&builds).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    delete_project_data(&workspace_root, project_key)
 }
 
 #[tauri::command]
@@ -764,6 +760,7 @@ pub fn run() {
 mod tests {
     use super::*;
     use auth::token_store::InMemoryTokenStore;
+    use sync::cache::{builds_root_dir, cache_dir};
 
     fn state_with_store(store: InMemoryTokenStore) -> AppState {
         state_with(store, PathBuf::from("unused-settings.json"))
@@ -835,6 +832,16 @@ mod tests {
             std::fs::create_dir_all(cache_dir(&workspace, key)).unwrap();
             std::fs::write(cache_dir(&workspace, key).join("1-a.zip"), b"zip").unwrap();
             std::fs::create_dir_all(builds_root_dir(&workspace, key).join("1.0")).unwrap();
+            let latest = sync::cache::latest_config_dir(
+                &workspace,
+                key,
+                LatestChannel::Release,
+                "shipping.zip",
+            );
+            std::fs::create_dir_all(&latest).unwrap();
+            std::fs::write(latest.join("game.exe"), b"exe").unwrap();
+            sync::cache::write_latest_synced_tag(&workspace, key, LatestChannel::Release, "1.0")
+                .unwrap();
         }
         let settings_path = dir.path().join("settings.json");
         settings.save_to(&settings_path).unwrap();
@@ -861,6 +868,14 @@ mod tests {
             .join("1-a.zip")
             .exists());
         assert!(builds_root_dir(&workspace, "someone/public-game").exists());
+        assert_eq!(
+            sync::cache::read_latest_synced_tag(
+                &workspace,
+                "someone/public-game",
+                LatestChannel::Release
+            ),
+            Some("1.0".to_string())
+        );
     }
 
     #[test]
@@ -878,6 +893,20 @@ mod tests {
         assert!(project.join("notes.txt").exists());
         assert!(!project.join("cache").exists());
         assert!(!project.join("builds").exists());
+        assert!(!project.join("latest").exists());
+    }
+
+    #[test]
+    fn clearing_a_project_cache_also_deletes_its_latest_builds() {
+        let (dir, state) = logged_in_workspace();
+        let workspace = dir.path().join("workspace");
+
+        clear_project_cache_inner("someone/public-game", &state).unwrap();
+
+        for data_dir in sync::cache::project_data_dirs(&workspace, "someone/public-game") {
+            assert!(!data_dir.exists(), "{} survived", data_dir.display());
+        }
+        assert!(cache_dir(&workspace, "org/private-game").exists());
     }
 
     #[test]

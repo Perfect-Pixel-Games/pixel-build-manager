@@ -63,6 +63,23 @@ pub fn builds_root_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
     project_dir(workspace_root, project_key).join("builds")
 }
 
+/// Parent of every latest channel's extraction dir (see `latest_channel_dir`).
+pub fn latest_root_dir(workspace_root: &Path, project_key: &str) -> PathBuf {
+    project_dir(workspace_root, project_key).join("latest")
+}
+
+/// Every directory this app writes a project's data into: downloaded
+/// cache, manual-mode builds and latest-mode builds. Anything that clears a
+/// project's disk footprint must go through this, so a new data dir can't
+/// be missed by one of them.
+pub fn project_data_dirs(workspace_root: &Path, project_key: &str) -> [PathBuf; 3] {
+    [
+        cache_dir(workspace_root, project_key),
+        builds_root_dir(workspace_root, project_key),
+        latest_root_dir(workspace_root, project_key),
+    ]
+}
+
 /// Replaces characters that are invalid (or awkward) as a single Windows
 /// path component with `_`. Needed for both a release's git tag (which can
 /// legally contain `/`, e.g. `"release/1.2.3"`) and a release asset's name
@@ -150,9 +167,7 @@ pub fn latest_channel_dir(
     project_key: &str,
     channel: LatestChannel,
 ) -> PathBuf {
-    project_dir(workspace_root, project_key)
-        .join("latest")
-        .join(channel.dir_name())
+    latest_root_dir(workspace_root, project_key).join(channel.dir_name())
 }
 
 /// The extraction directory for one ticked config within a latest channel.
