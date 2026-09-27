@@ -273,8 +273,7 @@ fieldset {
   margin-bottom: 4px;
 }
 
-.theme-toggle button,
-.icon-button {
+.theme-toggle button {
   position: relative;
   width: 34px;
   aspect-ratio: 1 / 1;
@@ -290,12 +289,14 @@ fieldset {
   border-radius: 0;
 }
 
-.icon-button {
+/* Log in / Log out: same height and border as the theme toggle. */
+.text-button {
+  height: 34px;
+  padding: 0 12px;
   margin-bottom: 4px;
-}
-
-.icon-button:hover {
-  color: var(--color-text);
+  line-height: 1;
+  font-size: 0.9em;
+  white-space: nowrap;
 }
 
 /* Collapse shared borders between segments. */
@@ -632,6 +633,18 @@ fieldset {
   border-top: 1px solid var(--color-border);
 }
 
+/* Logged out there's no project list above the URL field to separate from. */
+.popup__hint + .popup__url {
+  padding-top: 0;
+  border-top: none;
+}
+
+.popup__hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+
 .popup__url-label {
   color: var(--color-muted);
   font-size: 0.85em;
@@ -679,6 +692,13 @@ fieldset {
 .centered-card__lede {
   color: var(--color-muted);
   margin: 0;
+}
+
+.login-cancel {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 0.9em;
 }
 
 .login-device {

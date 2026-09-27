@@ -13,7 +13,7 @@ const noopBindUrl = async () => {};
 describe("BindProjectPopup", () => {
   it("lists every candidate project", () => {
     render(
-      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
+      <BindProjectPopup projects={projects} loggedIn onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByRole("button", { name: "last-beacon" })).toBeInTheDocument();
@@ -22,7 +22,7 @@ describe("BindProjectPopup", () => {
 
   it("filters the list by search text", () => {
     render(
-      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
+      <BindProjectPopup projects={projects} loggedIn onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={() => {}} />,
     );
 
     fireEvent.change(screen.getByLabelText("Search projects"), { target: { value: "other" } });
@@ -34,7 +34,7 @@ describe("BindProjectPopup", () => {
   it("calls onBind with the project's full name when clicked", () => {
     const onBind = vi.fn();
     render(
-      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={onBind} onToggleFavorite={() => {}} onClose={() => {}} />,
+      <BindProjectPopup projects={projects} loggedIn onBindUrl={noopBindUrl} onBind={onBind} onToggleFavorite={() => {}} onClose={() => {}} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "last-beacon" }));
@@ -47,6 +47,7 @@ describe("BindProjectPopup", () => {
     render(
       <BindProjectPopup
         projects={projects}
+        loggedIn
         onBindUrl={noopBindUrl}
         onBind={() => {}}
         onToggleFavorite={onToggleFavorite}
@@ -62,7 +63,7 @@ describe("BindProjectPopup", () => {
   it("calls onClose when Close is clicked", () => {
     const onClose = vi.fn();
     render(
-      <BindProjectPopup projects={projects} onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={onClose} />,
+      <BindProjectPopup projects={projects} loggedIn onBindUrl={noopBindUrl} onBind={() => {}} onToggleFavorite={() => {}} onClose={onClose} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
@@ -75,6 +76,7 @@ describe("BindProjectPopup", () => {
     render(
       <BindProjectPopup
         projects={projects}
+        loggedIn
         onBind={() => {}}
         onBindUrl={onBindUrl}
         onToggleFavorite={() => {}}
@@ -94,6 +96,7 @@ describe("BindProjectPopup", () => {
     render(
       <BindProjectPopup
         projects={projects}
+        loggedIn
         onBind={() => {}}
         onBindUrl={noopBindUrl}
         onToggleFavorite={() => {}}
@@ -109,6 +112,7 @@ describe("BindProjectPopup", () => {
     render(
       <BindProjectPopup
         projects={projects}
+        loggedIn
         onBind={() => {}}
         onBindUrl={onBindUrl}
         onToggleFavorite={() => {}}
@@ -122,5 +126,23 @@ describe("BindProjectPopup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Bind" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Repository someone/nothing was not found.");
+  });
+
+  it("logged out, hides the project list and offers only URL binding", () => {
+    render(
+      <BindProjectPopup
+        projects={projects}
+        loggedIn={false}
+        onBind={() => {}}
+        onBindUrl={noopBindUrl}
+        onToggleFavorite={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Search projects")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "last-beacon" })).not.toBeInTheDocument();
+    expect(screen.getByText(/only public repositories can be bound/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Bind a public repo by URL")).toBeInTheDocument();
   });
 });

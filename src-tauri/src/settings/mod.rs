@@ -28,6 +28,11 @@ pub struct ProjectSettings {
     pub ticked_configs: Vec<String>,
     #[serde(default)]
     pub sync_mode: SyncMode,
+    /// True when the project was bound by pasting its URL, rather than
+    /// picked from the logged-in account's project list. URL-bound
+    /// projects survive logging out; account-bound ones don't.
+    #[serde(default)]
+    pub bound_by_url: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -75,6 +80,34 @@ impl Settings {
         if !self.bound_projects.iter().any(|p| p == project_key) {
             self.bound_projects.push(project_key.to_string());
         }
+    }
+
+    /// Like `bind_project`, but also records how it was bound -- which
+    /// decides whether it survives logging out (see `bound_by_url`).
+    pub fn bind_project_via(&mut self, project_key: &str, by_url: bool) {
+        self.bind_project(project_key);
+        self.projects
+            .entry(project_key.to_string())
+            .or_default()
+            .bound_by_url = by_url;
+    }
+
+    /// Bound projects that came from the logged-in account's project list,
+    /// i.e. every bound project not bound by URL. Projects bound before
+    /// binding sources were recorded count as account-bound.
+    pub fn account_bound_projects(&self) -> Vec<String> {
+        self.bound_projects
+            .iter()
+            .filter(|key| !self.projects.get(*key).is_some_and(|p| p.bound_by_url))
+            .cloned()
+            .collect()
+    }
+
+    /// Unbinds `project_key` and forgets all its per-project settings
+    /// (selected release, ticked configs, favorite, sync mode).
+    pub fn remove_project(&mut self, project_key: &str) {
+        self.unbind_project(project_key);
+        self.projects.remove(project_key);
     }
 
     /// Removes `project_key` from the tab order. Leaves its `ProjectSettings`
@@ -142,6 +175,7 @@ mod tests {
                 selected_release_tag: Some("0.2.14".to_string()),
                 ticked_configs: vec!["shipping.zip".to_string()],
                 sync_mode: SyncMode::LatestRelease,
+                bound_by_url: true,
             },
         );
         let settings = Settings {
@@ -283,5 +317,51 @@ mod tests {
         let settings: Settings = serde_json::from_str(json).unwrap();
 
         assert_eq!(settings.projects["org/repo"].sync_mode, SyncMode::Manual);
+    }
+
+    #[test]
+    fn account_bound_projects_excludes_url_bound_ones() {
+        let mut settings = Settings::default();
+        settings.bind_project_via("org/from-account", false);
+        settings.bind_project_via("someone/from-url", true);
+        // Bound before sources were recorded: no ProjectSettings entry.
+        settings.bind_project("org/legacy");
+
+        assert_eq!(
+            settings.account_bound_projects(),
+            vec!["org/from-account", "org/legacy"]
+        );
+    }
+
+    #[test]
+    fn rebinding_from_the_account_list_clears_a_stale_url_flag() {
+        let mut settings = Settings::default();
+        settings.bind_project_via("org/repo", true);
+        settings.unbind_project("org/repo");
+
+        settings.bind_project_via("org/repo", false);
+
+        assert_eq!(settings.account_bound_projects(), vec!["org/repo"]);
+    }
+
+    #[test]
+    fn remove_project_unbinds_and_forgets_its_settings() {
+        let mut settings = Settings::default();
+        settings.bind_project_via("org/repo", false);
+        settings.set_selected_release("org/repo", "1.0");
+
+        settings.remove_project("org/repo");
+
+        assert!(settings.bound_projects.is_empty());
+        assert!(!settings.projects.contains_key("org/repo"));
+    }
+
+    #[test]
+    fn deserializing_settings_without_a_bound_by_url_field_defaults_to_false() {
+        let json = r#"{"projects":{"org/repo":{"favorite":false,"selected_release_tag":null}}}"#;
+
+        let settings: Settings = serde_json::from_str(json).unwrap();
+
+        assert!(!settings.projects["org/repo"].bound_by_url);
     }
 }

@@ -2,7 +2,7 @@ use crate::github::client::GithubClient;
 use crate::settings::{Settings, SyncMode};
 use crate::sync::cache::LatestChannel;
 use crate::sync::latest::{check_and_sync_latest, LatestSyncOutcome};
-use crate::{begin_operation, build_github_client, end_operation, AppState};
+use crate::{begin_operation, end_operation, github_client_or_anonymous, AppState};
 use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -114,7 +114,7 @@ pub async fn check_and_sync_now(app: &AppHandle, project_key: &str) -> Result<()
 
     begin_operation(&state, project_key)?;
 
-    let client_result = build_github_client(&state).await;
+    let client_result = github_client_or_anonymous(&state).await;
     let outcome: Result<LatestSyncOutcome, String> = match client_result {
         Ok(client) => {
             run_check(

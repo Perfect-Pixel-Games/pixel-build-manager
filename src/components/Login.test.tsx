@@ -150,4 +150,13 @@ describe("Login", () => {
 
     await waitFor(() => expect(opener.openUrl).toHaveBeenCalledWith("https://github.com/login/device"));
   });
+
+  it("offers to continue without logging in when cancellable", () => {
+    const onCancel = vi.fn();
+    render(<Login onLoggedIn={() => {}} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without logging in" }));
+
+    expect(onCancel).toHaveBeenCalled();
+  });
 });

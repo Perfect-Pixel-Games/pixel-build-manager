@@ -17,7 +17,9 @@ pub enum DownloadError {
 // `Accept: application/octet-stream` + a bearer token are required to fetch
 // a private repo's release asset bytes from GitHub's asset-content API --
 // without them the request 404s (GitHub masks private-resource existence
-// rather than returning 401/403) instead of streaming the asset.
+// rather than returning 401/403) instead of streaming the asset. An empty
+// `auth_token` (logged out) sends no Authorization header at all, which is
+// how public repos' assets are fetched anonymously.
 pub async fn download_with_progress<F: FnMut(u64, u64)>(
     http: &reqwest::Client,
     url: &str,
@@ -26,13 +28,14 @@ pub async fn download_with_progress<F: FnMut(u64, u64)>(
     expected_size: u64,
     mut on_progress: F,
 ) -> Result<(), DownloadError> {
-    let response = http
+    let mut request = http
         .get(url)
         .header("User-Agent", "pixel-build-manager")
-        .header("Accept", "application/octet-stream")
-        .bearer_auth(auth_token)
-        .send()
-        .await?;
+        .header("Accept", "application/octet-stream");
+    if !auth_token.is_empty() {
+        request = request.bearer_auth(auth_token);
+    }
+    let response = request.send().await?;
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
@@ -87,7 +90,7 @@ async fn write_response_to_file<F: FnMut(u64, u64)>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -118,6 +121,42 @@ mod tests {
 
         assert_eq!(std::fs::read(&destination).unwrap(), body);
         assert_eq!(last_progress, (1000, 1000));
+    }
+
+    #[tokio::test]
+    async fn an_empty_token_downloads_anonymously_without_an_authorization_header() {
+        let server = MockServer::start().await;
+        // Catches (and fails) any request that wrongly sends an
+        // Authorization header; the headerless mock below must be the one
+        // that responds.
+        Mock::given(method("GET"))
+            .and(path("/asset.zip"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("must not send auth"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/asset.zip"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![3u8; 10]))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("asset.zip");
+        let http = reqwest::Client::new();
+
+        download_with_progress(
+            &http,
+            &format!("{}/asset.zip", server.uri()),
+            "",
+            &destination,
+            10,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), vec![3u8; 10]);
     }
 
     #[tokio::test]

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { isLoggedIn, logout, SESSION_EXPIRED_ERROR } from "./api/auth";
+import {
+  confirmLogout,
+  isLoggedIn,
+  listAccountBoundProjects,
+  logout,
+  SESSION_EXPIRED_ERROR,
+} from "./api/auth";
 import { listProjects, listReleasesForProject, toggleFavorite, Project, Release, ReleaseAsset } from "./api/projects";
 import { bindProject, bindProjectByUrl, getWorkspaceRoot, listBoundProjects, unbindProject } from "./api/settings";
 import {
@@ -25,15 +31,15 @@ import { SyncedBuildControls } from "./components/SyncedBuildControls";
 import { SyncStatus } from "./components/SyncStatus";
 import { TabBar } from "./components/TabBar";
 import { ThemeToggle } from "./components/ThemeToggle";
-import { LogOutIcon } from "./components/icons";
 import { WorkspaceSetup } from "./components/WorkspaceSetup";
 import { useLatestSync } from "./hooks/useLatestSync";
 import { useSync } from "./hooks/useSync";
 import { useTheme } from "./hooks/useTheme";
 import "./App.css";
 
-export function ProjectDetail({ projectKey }: { projectKey: string }) {
+export function ProjectDetail({ projectKey, loggedIn = true }: { projectKey: string; loggedIn?: boolean }) {
   const [releases, setReleases] = useState<Release[]>([]);
+  const [releasesFailed, setReleasesFailed] = useState(false);
   const [selectedReleaseTag, setSelectedReleaseTagState] = useState<string | null>(null);
   const [tickedConfigs, setTickedConfigsState] = useState<string[]>([]);
   const [syncedConfigs, setSyncedConfigs] = useState<string[]>([]);
@@ -44,7 +50,10 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
   useEffect(() => {
     listReleasesForProject(projectKey)
       .then(setReleases)
-      .catch((error) => console.error("failed to load releases", error));
+      .catch((error) => {
+        console.error("failed to load releases", error);
+        setReleasesFailed(true);
+      });
     getSelectedRelease(projectKey)
       .then(setSelectedReleaseTagState)
       .catch((error) => console.error("failed to load selected release", error));
@@ -150,6 +159,12 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
 
   return (
     <div className="project-detail">
+      {releasesFailed && (
+        <p className="error-text" role="alert">
+          Couldn't load releases for {projectKey}.
+          {!loggedIn && " If it's a private repository, log in to GitHub to access it."}
+        </p>
+      )}
       <BusyOverlay active={isBusy} label={busyLabel}>
         <BuildBrowser
           releases={releases}
@@ -200,7 +215,10 @@ export function ProjectDetail({ projectKey }: { projectKey: string }) {
 
 function App() {
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
-  const [workspaceRoot, setWorkspaceRootState] = useState<string | null>(null);
+  // `undefined` until loaded, so the workspace-setup screen doesn't flash.
+  const [workspaceRoot, setWorkspaceRootState] = useState<string | null | undefined>(undefined);
+  const [showLogin, setShowLogin] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [boundKeys, setBoundKeys] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -220,32 +238,41 @@ function App() {
       .catch(() => setLoggedIn(false));
   }, []);
 
+  // Logging in is optional, so the workspace and bound tabs load regardless.
   useEffect(() => {
-    if (loggedIn) {
-      getWorkspaceRoot()
-        .then(setWorkspaceRootState)
-        .catch((error) => console.error("failed to load workspace root", error));
-      listProjects()
-        .then((data) => {
-          setProjects(data);
-          listBoundProjects()
-            .then((keys) => {
-              setBoundKeys(keys);
-              // Land on the first bound tab by default, rather than an
-              // empty pane, on every fresh load -- but never override a
-              // tab the user already picked this session.
-              setActiveTab((prev) => prev ?? keys[0] ?? null);
-            })
-            .catch((error) => console.error("failed to load bound projects", error));
-        })
-        .catch((error) => {
-          if (error === SESSION_EXPIRED_ERROR) {
-            setLoggedIn(false);
-            return;
-          }
-          console.error("failed to load projects", error);
-        });
+    getWorkspaceRoot()
+      .then(setWorkspaceRootState)
+      .catch((error) => {
+        console.error("failed to load workspace root", error);
+        setWorkspaceRootState(null);
+      });
+    listBoundProjects()
+      .then((keys) => {
+        setBoundKeys(keys);
+        // Land on the first bound tab by default, rather than an empty
+        // pane, on every fresh load -- but never override a tab the user
+        // already picked this session.
+        setActiveTab((prev) => prev ?? keys[0] ?? null);
+      })
+      .catch((error) => console.error("failed to load bound projects", error));
+  }, []);
+
+  // The browsable project list only exists when logged in; logged out,
+  // repos can only be bound by URL.
+  useEffect(() => {
+    if (!loggedIn) {
+      setProjects([]);
+      return;
     }
+    listProjects()
+      .then(setProjects)
+      .catch((error) => {
+        if (error === SESSION_EXPIRED_ERROR) {
+          setLoggedIn(false);
+          return;
+        }
+        console.error("failed to load projects", error);
+      });
   }, [loggedIn]);
 
   const handleToggleFavorite = async (fullName: string, favorite: boolean) => {
@@ -289,26 +316,48 @@ function App() {
     }
   };
 
-  const handleLoggedIn = useCallback(() => setLoggedIn(true), []);
+  const handleLoggedIn = useCallback(() => {
+    setLoggedIn(true);
+    setShowLogin(false);
+  }, []);
 
   const handleLogout = async () => {
+    setLogoutError(null);
     try {
-      await logout();
+      const toRemove = await listAccountBoundProjects();
+      if (toRemove.length > 0 && !(await confirmLogout(toRemove))) {
+        return;
+      }
+      const removed = await logout();
+      setBoundKeys((prev) => prev.filter((key) => !removed.includes(key)));
+      setActiveTab((prev) => (prev !== null && removed.includes(prev) ? null : prev));
       setLoggedIn(false);
     } catch (error) {
       console.error("failed to log out", error);
+      setLogoutError(String(error));
+      // A partial failure may still have logged out and unbound projects,
+      // so re-read the real state rather than guessing.
+      isLoggedIn()
+        .then(setLoggedIn)
+        .catch(() => setLoggedIn(false));
+      listBoundProjects()
+        .then((keys) => {
+          setBoundKeys(keys);
+          setActiveTab((prev) => (prev !== null && keys.includes(prev) ? prev : null));
+        })
+        .catch((e) => console.error("failed to reload bound projects", e));
     }
   };
 
   let content: ReactNode;
-  if (loggedIn === null) {
+  if (loggedIn === null || workspaceRoot === undefined) {
     content = (
       <div className="centered-screen">
         <p className="centered-card__lede">Loading...</p>
       </div>
     );
-  } else if (!loggedIn) {
-    content = <Login onLoggedIn={handleLoggedIn} />;
+  } else if (showLogin) {
+    content = <Login onLoggedIn={handleLoggedIn} onCancel={() => setShowLogin(false)} />;
   } else if (!workspaceRoot) {
     content = <WorkspaceSetup onSet={setWorkspaceRootState} />;
   } else {
@@ -324,13 +373,25 @@ function App() {
             onRequestBind={() => setShowBindPopup(true)}
           />
           <ThemeToggle theme={theme} onChange={setTheme} />
-          <button className="icon-button" aria-label="Log out" title="Log out" onClick={handleLogout}>
-            <LogOutIcon />
-          </button>
+          {loggedIn ? (
+            <button className="text-button" onClick={handleLogout}>
+              Log out
+            </button>
+          ) : (
+            <button className="text-button" title="Log in to GitHub" onClick={() => setShowLogin(true)}>
+              Log in
+            </button>
+          )}
         </div>
+        {logoutError && (
+          <p className="error-text" role="alert">
+            {logoutError}
+          </p>
+        )}
         {showBindPopup && (
           <BindProjectPopup
             projects={projects.filter((p) => !boundKeys.includes(p.full_name))}
+            loggedIn={loggedIn}
             onBind={handleBind}
             onBindUrl={handleBindUrl}
             onToggleFavorite={handleToggleFavorite}
@@ -338,7 +399,9 @@ function App() {
           />
         )}
         {activeTab ? (
-          <ProjectDetail key={activeTab} projectKey={activeTab} />
+          // Keyed on login state too, so releases reload with (or without)
+          // credentials after logging in or out.
+          <ProjectDetail key={`${activeTab}:${loggedIn}`} projectKey={activeTab} loggedIn={loggedIn} />
         ) : (
           <p className="empty-state">Bind a project to get started.</p>
         )}
