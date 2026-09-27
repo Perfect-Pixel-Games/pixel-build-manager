@@ -8,7 +8,7 @@ mod version;
 
 use auth::device_flow::DeviceFlowClient;
 use auth::login::{perform_device_login, LoginStatus};
-use auth::session::ensure_valid_access_token;
+use auth::session::{ensure_valid_access_token, SESSION_EXPIRED};
 use auth::token_store::{KeyringTokenStore, TokenStore};
 use github::client::{GithubClient, ReleaseSummary};
 use github::repo_url::resolve_bindable_repo;
@@ -129,8 +129,30 @@ pub(crate) async fn build_github_client(state: &AppState) -> Result<GithubClient
     Ok(GithubClient::new(token))
 }
 
+/// An authenticated client when the user is logged in, otherwise an
+/// anonymous one. Logging in is optional: anonymously, only public repos
+/// are reachable (at GitHub's lower unauthenticated rate limit). If the
+/// stored session has expired it is cleared, and this falls back to
+/// anonymous rather than failing, so public repos keep working.
+pub(crate) async fn github_client_or_anonymous(state: &AppState) -> Result<GithubClient, String> {
+    if state.token_store.load()?.is_none() {
+        return Ok(GithubClient::anonymous());
+    }
+    match build_github_client(state).await {
+        Err(e) if e == SESSION_EXPIRED => Ok(GithubClient::anonymous()),
+        other => other,
+    }
+}
+
+/// Lists the logged-in user's own and organisation repos that have
+/// releases. Empty when logged out -- anonymously, repos can only be bound
+/// by URL. A session that has expired still reports `SESSION_EXPIRED`, so
+/// the frontend can switch to its logged-out state.
 #[tauri::command]
 async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectListItem>, String> {
+    if state.token_store.load()?.is_none() {
+        return Ok(Vec::new());
+    }
     let client = build_github_client(&state).await?;
     let repos = client
         .list_accessible_repos_with_releases()
@@ -164,7 +186,7 @@ async fn list_releases_for_project(
     let (owner, repo) = full_name
         .split_once('/')
         .ok_or_else(|| format!("invalid project full_name: {}", full_name))?;
-    let client = build_github_client(&state).await?;
+    let client = github_client_or_anonymous(&state).await?;
     client
         .list_releases(owner, repo)
         .await
@@ -231,7 +253,7 @@ async fn bind_project_by_url(
     url: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProjectListItem, String> {
-    let client = build_github_client(&state).await?;
+    let client = github_client_or_anonymous(&state).await?;
     let repo = resolve_bindable_repo(&client, &url).await?;
 
     let _guard = state.settings_lock.lock().map_err(|e| e.to_string())?;
@@ -453,7 +475,7 @@ async fn sync_release_asset_inner(
 ) -> Result<(), String> {
     let workspace_root = workspace_root_from_settings(state)?;
 
-    let client = build_github_client(state).await?;
+    let client = github_client_or_anonymous(state).await?;
     let (owner, repo) = project_key
         .split_once('/')
         .ok_or_else(|| format!("invalid project_key: {project_key}"))?;
@@ -651,4 +673,62 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use auth::token_store::InMemoryTokenStore;
+
+    fn state_with_store(store: InMemoryTokenStore) -> AppState {
+        AppState {
+            token_store: Arc::new(store),
+            settings_path: PathBuf::from("unused-settings.json"),
+            settings_lock: Mutex::new(()),
+            active_operations: Mutex::new(HashSet::new()),
+            token_refresh_lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    #[tokio::test]
+    async fn logged_out_users_get_an_anonymous_client() {
+        let state = state_with_store(InMemoryTokenStore::new());
+
+        let client = github_client_or_anonymous(&state).await.unwrap();
+
+        assert_eq!(client.token(), "");
+    }
+
+    #[tokio::test]
+    async fn an_unusable_session_falls_back_to_anonymous_and_is_cleared() {
+        let store = InMemoryTokenStore::new();
+        store.save("not a stored-token json blob").unwrap();
+        let state = state_with_store(store);
+
+        let client = github_client_or_anonymous(&state).await.unwrap();
+
+        assert_eq!(client.token(), "");
+        assert_eq!(state.token_store.load().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_valid_session_gets_an_authenticated_client() {
+        let store = InMemoryTokenStore::new();
+        let far_future = u64::MAX / 2;
+        auth::session::save_stored_token(
+            &store,
+            &auth::session::StoredToken {
+                access_token: "live-token".to_string(),
+                refresh_token: "refresh".to_string(),
+                access_token_expires_at: far_future,
+                refresh_token_expires_at: far_future,
+            },
+        )
+        .unwrap();
+        let state = state_with_store(store);
+
+        let client = github_client_or_anonymous(&state).await.unwrap();
+
+        assert_eq!(client.token(), "live-token");
+    }
 }

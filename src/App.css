@@ -632,6 +632,18 @@ fieldset {
   border-top: 1px solid var(--color-border);
 }
 
+/* Logged out there's no project list above the URL field to separate from. */
+.popup__hint + .popup__url {
+  padding-top: 0;
+  border-top: none;
+}
+
+.popup__hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+
 .popup__url-label {
   color: var(--color-muted);
   font-size: 0.85em;
@@ -679,6 +691,13 @@ fieldset {
 .centered-card__lede {
   color: var(--color-muted);
   margin: 0;
+}
+
+.login-cancel {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 0.9em;
 }
 
 .login-device {

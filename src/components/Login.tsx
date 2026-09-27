@@ -4,9 +4,11 @@ import { loginStart, onLoginStatus, LoginStatus } from "../api/auth";
 
 type Props = {
   onLoggedIn: () => void;
+  /** Leaves the login screen without logging in (logging in is optional). */
+  onCancel?: () => void;
 };
 
-export function Login({ onLoggedIn }: Props) {
+export function Login({ onLoggedIn, onCancel }: Props) {
   const [status, setStatus] = useState<LoginStatus | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -66,7 +68,10 @@ export function Login({ onLoggedIn }: Props) {
   return (
     <div className="centered-screen">
       <div className="centered-card">
-        <p className="centered-card__lede">Sign in to browse and sync your team's builds.</p>
+        <p className="centered-card__lede">
+          Log in to browse and sync builds from your own and your organisations' repositories,
+          including private ones. Public repositories can be bound by URL without logging in.
+        </p>
         <button onClick={handleLogin}>Log in with GitHub</button>
         {status?.status === "awaiting_user" && (
           <div className="login-device">
@@ -92,6 +97,11 @@ export function Login({ onLoggedIn }: Props) {
         {status?.status === "denied" && <p className="error-text">Login was denied.</p>}
         {status?.status === "expired" && <p className="error-text">The login code expired. Try again.</p>}
         {status?.status === "error" && <p className="error-text">Login failed: {status.error}</p>}
+        {onCancel && (
+          <button className="login-cancel" onClick={onCancel}>
+            Continue without logging in
+          </button>
+        )}
       </div>
     </div>
   );

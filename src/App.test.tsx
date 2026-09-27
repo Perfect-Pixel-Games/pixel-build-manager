@@ -52,6 +52,7 @@ function mockAppShellBaseline() {
   vi.mocked(versionApi.getVersionLabel).mockResolvedValue("Release 0.4.0");
   vi.mocked(settingsApi.getWorkspaceRoot).mockResolvedValue("D:\\Builds");
   vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+  vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
 }
 
 describe("ProjectDetail", () => {
@@ -165,6 +166,30 @@ describe("ProjectDetail", () => {
   });
 });
 
+describe("ProjectDetail release loading failures", () => {
+  it("logged out, suggests logging in when a repo's releases can't be loaded", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listReleasesForProject).mockRejectedValue("github api error (404): Not Found");
+
+    render(<ProjectDetail projectKey="org/private-repo" loggedIn={false} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't load releases for org/private-repo.");
+    expect(alert).toHaveTextContent("log in to GitHub");
+  });
+
+  it("logged in, reports the failure without the login hint", async () => {
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listReleasesForProject).mockRejectedValue("network error");
+
+    render(<ProjectDetail projectKey="org/repo" />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't load releases for org/repo.");
+    expect(alert).not.toHaveTextContent("log in");
+  });
+});
+
 describe("App", () => {
   it("shows the version label in the footer even before logging in", async () => {
     vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
@@ -173,6 +198,8 @@ describe("App", () => {
     // useTheme() runs unconditionally (even pre-login, so the login screen
     // itself reflects the saved theme), so it must be mocked here too.
     vi.mocked(settingsApi.getTheme).mockResolvedValue("system");
+    vi.mocked(settingsApi.getWorkspaceRoot).mockResolvedValue(null);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
 
     render(<App />);
 
@@ -181,13 +208,68 @@ describe("App", () => {
     expect(versionLabel.closest(".app-footer")).not.toBeNull();
   });
 
-  it("routes back to the Login screen when loading projects reports the session has expired", async () => {
+  it("drops to logged-out mode when loading projects reports the session has expired", async () => {
     mockAppShellBaseline();
     vi.mocked(projectsApi.listProjects).mockRejectedValue(SESSION_EXPIRED_ERROR);
 
     render(<App />);
 
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+  });
+
+  it("opens on the project binding page when logged out, not the login screen", async () => {
+    mockAppShellBaseline();
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /log in with github/i })).not.toBeInTheDocument();
+    expect(projectsApi.listProjects).not.toHaveBeenCalled();
+  });
+
+  it("the Log in button opens the login screen, which can be left without logging in", async () => {
+    mockAppShellBaseline();
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log in" }));
+
     expect(await screen.findByRole("button", { name: /log in with github/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without logging in" }));
+
+    expect(await screen.findByRole("button", { name: "Bind a project" })).toBeInTheDocument();
+  });
+
+  it("logging out keeps the bound tabs and turns the button into Log in", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([
+      { full_name: "org/repo", owner: "org", name: "repo", favorite: false },
+    ]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["org/repo"]);
+    vi.mocked(authApi.logout).mockResolvedValue(undefined);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
+
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("repo");
+  });
+
+  it("logged out, the bind popup offers only URL binding", async () => {
+    mockAppShellBaseline();
+    vi.mocked(authApi.isLoggedIn).mockResolvedValue(false);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind a project" }));
+
+    expect(await screen.findByLabelText("Bind a public repo by URL")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search projects")).not.toBeInTheDocument();
   });
 
   it("shows only a + button when no projects are bound", async () => {
