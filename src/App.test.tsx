@@ -249,4 +249,41 @@ describe("App", () => {
     await waitFor(() => expect(settingsApi.unbindProject).toHaveBeenCalledWith("org/repo"));
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
+
+  it("binding a repo by URL opens a tab named after the repo", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.bindProjectByUrl).mockResolvedValue({
+      full_name: "someone/public-game",
+      owner: "someone",
+      name: "public-game",
+      favorite: false,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind a project" }));
+    fireEvent.change(await screen.findByLabelText("Or bind any public repo by URL"), {
+      target: { value: "https://github.com/someone/public-game" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+
+    await waitFor(() =>
+      expect(settingsApi.bindProjectByUrl).toHaveBeenCalledWith("https://github.com/someone/public-game"),
+    );
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("public-game");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("names a URL-bound tab after its repo even when it isn't in the project list", async () => {
+    mockAppShellBaseline();
+    mockProjectDetailBaseline();
+    vi.mocked(projectsApi.listProjects).mockResolvedValue([]);
+    vi.mocked(settingsApi.listBoundProjects).mockResolvedValue(["someone/public-game"]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("tab", { selected: true })).toHaveTextContent("public-game");
+  });
 });

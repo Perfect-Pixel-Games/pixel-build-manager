@@ -160,6 +160,17 @@ impl GithubClient {
             .collect())
     }
 
+    /// Looks up a single repo by owner/name. Works for any public repo (and
+    /// any private one the token can see), regardless of whether the user is
+    /// a member of it. The returned `full_name` carries GitHub's canonical
+    /// casing, so it's safe to use as a project key.
+    pub async fn get_repo(&self, owner: &str, repo: &str) -> Result<RepoSummary, GithubError> {
+        let path = format!("/repos/{}/{}", owner, repo);
+        let response = self.request(reqwest::Method::GET, &path).send().await?;
+        let response = Self::ensure_success(response).await?;
+        Ok(response.json().await?)
+    }
+
     pub async fn has_any_release(&self, owner: &str, repo: &str) -> Result<bool, GithubError> {
         let path = format!("/repos/{}/{}/releases?per_page=1", owner, repo);
         let response = self.request(reqwest::Method::GET, &path).send().await?;
@@ -381,6 +392,39 @@ mod tests {
         let repos = client.list_accessible_repos_with_releases().await.unwrap();
 
         assert!(repos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_repo_returns_the_canonical_repo() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/some-org/public-game"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
+                { "name": "Public-Game", "full_name": "Some-Org/Public-Game", "owner": { "login": "Some-Org" } }
+            )))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::with_base_url("token123".to_string(), server.uri());
+        let repo = client.get_repo("some-org", "public-game").await.unwrap();
+
+        assert_eq!(repo.full_name, "Some-Org/Public-Game");
+        assert_eq!(repo.owner.login, "Some-Org");
+    }
+
+    #[tokio::test]
+    async fn get_repo_maps_a_missing_repo_to_a_404_api_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/nobody/nothing"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&server)
+            .await;
+
+        let client = GithubClient::with_base_url("token123".to_string(), server.uri());
+        let result = client.get_repo("nobody", "nothing").await;
+
+        assert!(matches!(result, Err(GithubError::Api { status: 404, .. })));
     }
 
     #[test]
